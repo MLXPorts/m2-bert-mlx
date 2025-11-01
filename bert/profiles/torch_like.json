@@ -1,0 +1,10 @@
+{
+  "name": "torch_like",
+  "description": "Settings to mimic PyTorch conventions where they differ",
+  "gelu_mode": "erf",
+  "fft_norm": "forward",
+  "bidir_combine": "sum",
+  "bidir_space": "freq",
+  "layer_norm_strict": true,
+  "strict_kernels": false
+}

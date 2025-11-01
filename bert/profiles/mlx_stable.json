@@ -1,0 +1,10 @@
+{
+  "name": "mlx_stable",
+  "description": "MLX-preferred numerics for stable training/inference",
+  "gelu_mode": "erf",
+  "fft_norm": "forward",
+  "bidir_combine": "avg",
+  "bidir_space": "time",
+  "layer_norm_strict": false,
+  "strict_kernels": false
+}

@@ -224,12 +224,21 @@ class HyenaFilter(OptimModule):
 
         # Ensure compatibility with filters that return a tuple
         k_fwd = k_fwd[0] if type(k_fwd) is tuple else k_fwd
+        # Move to (H, L) so time is the last dimension for padding/FFT
+        if k_fwd.dim() == 2:  # (L, H)
+            k_fwd = k_fwd.transpose(0, 1)  # (H, L)
+        elif k_fwd.dim() == 3:  # (1, L, H)
+            k_fwd = k_fwd[0].transpose(0, 1)  # (H, L)
         if bias is None:
             bias = self.bias
-        bias = bias if self.use_bias else 0 * bias
+        bias = bias if self.use_bias else torch.zeros_like(bias)
 
         if self.bidirectional:
             k_rev = k_rev[0] if type(k_rev) is tuple else k_rev
+            if k_rev.dim() == 2:
+                k_rev = k_rev.transpose(0, 1)
+            elif k_rev.dim() == 3:
+                k_rev = k_rev[0].transpose(0, 1)
             k = F.pad(k_fwd, (0, L)) \
                       + F.pad(k_rev.flip(-1), (L, 0))
         else:
