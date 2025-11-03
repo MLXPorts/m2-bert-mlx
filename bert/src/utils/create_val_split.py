@@ -1,10 +1,10 @@
 import json
 import math
-from tqdm import tqdm
-from collections import defaultdict
 
-directory = # Enter path to your data directory here
-new_directory = # Enter output path here
+from tqdm import tqdm
+
+directory = "" # Enter path to your data directory here
+new_directory = "" # Enter output path here
 val_pct = 0.0005 # Percentage of data to use for validation
 
 index = f"{directory}/train/index.json"
