@@ -1,0 +1,10 @@
+{
+  "name": "torch_avg",
+  "description": "Torch-like frequency combine but averaging forward/reverse",
+  "gelu_mode": "erf",
+  "fft_norm": "forward",
+  "bidir_combine": "avg",
+  "bidir_space": "freq",
+  "layer_norm_strict": true,
+  "strict_kernels": false
+}
