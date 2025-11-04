@@ -15,9 +15,9 @@ import torch.nn as tnn
 import mlx.core as mx
 import mlx.nn as mnn
 
-from bert.src.mm_mlx.monarch_mixer_mlx import MonarchMixerSequenceMixing as MLXMixer
-from bert.src.mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
-from bert.src.mm.hyena_utils import HyenaFilter as TorchHyena
+from mm_mlx.monarch_mixer_mlx import MonarchMixerSequenceMixing as MLXMixer
+from mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
+from mm.hyena_utils import HyenaFilter as TorchHyena
 
 
 def _to_torch(a):
@@ -76,15 +76,26 @@ class TorchMixerMirror(tnn.Module):
         self.dw.weight.data = _to_torch(mlx_mixer.short_filter_weight)
 
         # Hyena mirror from MLX weights
+        filter_fn = mlx_mixer.filter_fn
+        if hasattr(filter_fn, 'implicit_filter_layers') and filter_fn.implicit_filter_layers:
+            first_linear = filter_fn.implicit_filter_layers[0]
+            order = _to_torch(first_linear.weight).shape[1]
+            num_inner = max(len(filter_fn.implicit_filter_layers) - 2, 0)
+            mlx_layers = filter_fn.implicit_filter_layers
+        else:
+            order = self.d
+            num_inner = 0
+            mlx_layers = []
+
         self.hyena = TorchHyena(
             d_model=self.d,
-            emb_dim=mlx_mixer.filter_fn.emb_dim,
-            order=mlx_mixer.filter_fn.implicit_filter.layers[0].weight.shape[1],
+            emb_dim=filter_fn.emb_dim,
+            order=order,
             seq_len=mlx_mixer.l_max,
-            num_inner_mlps=sum(1 for l in mlx_mixer.filter_fn.implicit_filter.layers if isinstance(l, mnn.Linear) and l.weight.shape[0]==l.weight.shape[1]),
-            bidirectional=mlx_mixer.filter_fn.bidirectional,
-            modulate=mlx_mixer.filter_fn.modulate,
-            normalized=mlx_mixer.filter_fn.normalized,
+            num_inner_mlps=num_inner,
+            bidirectional=filter_fn.bidirectional,
+            modulate=filter_fn.modulate,
+            normalized=filter_fn.normalized,
         )
         # Copy Hyena params
         self.hyena.pos_emb.z.data = _to_torch(mlx_mixer.filter_fn.pos_emb.z).to(dtype=self.hyena.pos_emb.z.dtype)
@@ -92,13 +103,13 @@ class TorchMixerMirror(tnn.Module):
         self.hyena.modulation.deltas.data = _to_torch(mlx_mixer.filter_fn.modulation.deltas).to(dtype=self.hyena.modulation.deltas.dtype)
         self.hyena.bias.data = _to_torch(mlx_mixer.filter_fn.bias).to(dtype=self.hyena.bias.dtype)
         # Copy MLPs
-        mlx_layers = [l for l in mlx_mixer.filter_fn.implicit_filter.layers if isinstance(l, mnn.Linear)]
         torch_layers = [l for l in self.hyena.implicit_filter if isinstance(l, tnn.Linear)]
+        assert len(mlx_layers) == len(torch_layers)
         for ml, tl in zip(mlx_layers, torch_layers):
             _copy_linear_mlx_to_torch(ml, tl)
 
-        if mlx_mixer.filter_fn.bidirectional:
-            mlx_layers_rev = [l for l in mlx_mixer.filter_fn.implicit_filter_rev.layers if isinstance(l, mnn.Linear)]
+        if filter_fn.bidirectional and hasattr(filter_fn, 'implicit_filter_layers_rev'):
+            mlx_layers_rev = filter_fn.implicit_filter_layers_rev
             torch_layers_rev = [l for l in self.hyena.implicit_filter_rev if isinstance(l, tnn.Linear)]
             for ml, tl in zip(mlx_layers_rev, torch_layers_rev):
                 _copy_linear_mlx_to_torch(ml, tl)
@@ -157,4 +168,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-

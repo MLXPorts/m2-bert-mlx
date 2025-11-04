@@ -17,8 +17,8 @@ import torch.nn as tnn
 import mlx.core as mx
 import mlx.nn as mnn
 
-from bert.src.mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
-from bert.src.mm.hyena_utils import HyenaFilter as TorchHyena, fftconv_ref
+from mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
+from mm.hyena_utils import HyenaFilter as TorchHyena, fftconv_ref
 
 
 def _to_torch(a):
@@ -44,16 +44,23 @@ def build_mirrored_torch_hyena_from_mlx(hx: MLXHyena) -> TorchHyena:
     """
     d_model = hx.d_model
     emb_dim = hx.emb_dim
-    order = hx.implicit_filter.layers[0].weight.shape[1] if isinstance(hx.implicit_filter, mnn.Sequential) else d_model
+
+    if hasattr(hx, 'implicit_filter_layers') and hx.implicit_filter_layers:
+        first_linear = hx.implicit_filter_layers[0]
+        order = _to_torch(first_linear.weight).shape[1]
+        num_inner = max(len(hx.implicit_filter_layers) - 2, 0)
+        mlx_layers = hx.implicit_filter_layers
+    else:
+        order = d_model
+        num_inner = 0
+        mlx_layers = []
 
     ty = TorchHyena(
         d_model=d_model,
         emb_dim=emb_dim,
         order=order,
         seq_len=hx.seq_len,
-        num_inner_mlps=sum(
-            1 for l in hx.implicit_filter.layers if isinstance(l, mnn.Linear) and l.weight.shape[0] == order and l.weight.shape[1] == order
-        ),
+        num_inner_mlps=num_inner,
         bidirectional=hx.bidirectional,
         modulate=hx.modulate,
         normalized=hx.normalized,
@@ -67,11 +74,6 @@ def build_mirrored_torch_hyena_from_mlx(hx: MLXHyena) -> TorchHyena:
     ty.bias.data = _to_torch(hx.bias).to(dtype=ty.bias.dtype)
 
     # Copy implicit MLP weights/biases layer-by-layer
-    # Prefer explicit linear layer list if provided by MLX module
-    if hasattr(hx, 'implicit_filter_layers'):
-        mlx_layers = hx.implicit_filter_layers
-    else:
-        mlx_layers = [l for l in hx.implicit_filter.layers if isinstance(l, mnn.Linear)]
     torch_layers = [l for l in ty.implicit_filter if isinstance(l, tnn.Linear)]
     assert len(mlx_layers) == len(torch_layers)
     for ml, tl in zip(mlx_layers, torch_layers):
@@ -84,11 +86,12 @@ def build_mirrored_torch_hyena_from_mlx(hx: MLXHyena) -> TorchHyena:
         else:
             # Best effort transpose if dims swapped
             tl.weight.data = w.T.contiguous().to(dtype=tl.weight.dtype)
-        if ml.bias is not None and tl.bias is not None:
-            tl.bias.data = _to_torch(ml.bias).to(dtype=tl.bias.dtype)
+        ml_bias = getattr(ml, 'bias', None)
+        if ml_bias is not None and tl.bias is not None:
+            tl.bias.data = _to_torch(ml_bias).to(dtype=tl.bias.dtype)
 
-    if hx.bidirectional:
-        mlx_layers_rev = [l for l in hx.implicit_filter_rev.layers if isinstance(l, mnn.Linear)]
+    if hx.bidirectional and hasattr(hx, 'implicit_filter_layers_rev'):
+        mlx_layers_rev = hx.implicit_filter_layers_rev
         torch_layers_rev = [l for l in ty.implicit_filter_rev if isinstance(l, tnn.Linear)]
         assert len(mlx_layers_rev) == len(torch_layers_rev)
         for ml, tl in zip(mlx_layers_rev, torch_layers_rev):
@@ -97,8 +100,9 @@ def build_mirrored_torch_hyena_from_mlx(hx: MLXHyena) -> TorchHyena:
                 tl.weight.data = w.T.contiguous().to(dtype=tl.weight.dtype)
             else:
                 tl.weight.data = w.T.contiguous().to(dtype=tl.weight.dtype)
-            if ml.bias is not None and tl.bias is not None:
-                tl.bias.data = _to_torch(ml.bias).to(dtype=tl.bias.dtype)
+            ml_bias = getattr(ml, 'bias', None)
+            if ml_bias is not None and tl.bias is not None:
+                tl.bias.data = _to_torch(ml_bias).to(dtype=tl.bias.dtype)
 
     return ty
 
