@@ -26,7 +26,7 @@ import mlx.nn as nn
 
 from .typed import f32, u32
 # math_ops is alongside mm_mlx at bert/src; import absolute
-from math_ops import PI
+# No host math needed
 
 
 # -----------------------------------------------------------------------------
@@ -264,11 +264,10 @@ class MetalFFTConv(nn.Module):
     Always uses our compiled kernel; no fallbacks. Kernels are compiled once globally.
     """
 
-    def __init__(self, match_torch: bool = False, use_twiddle_tables: bool = True, dd_mode: bool = False, dd_vec: bool = True):
+    def __init__(self, match_torch: bool = False, dd_mode: bool = False, dd_vec: bool = True):
         super().__init__()
         # If True, we may switch multiply path to pure f32 in future; kernel is already f32.
         self.match_torch = match_torch
-        self.use_twiddle_tables = True  # kernel precomputes tables in threadgroup
         self.dd_mode = dd_mode
         self.dd_vec = dd_vec
         self.kernel = _get_fftconv_kernel()
