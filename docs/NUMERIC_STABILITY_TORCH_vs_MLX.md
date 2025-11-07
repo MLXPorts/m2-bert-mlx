@@ -6,14 +6,14 @@ During the Hyena/Monarch mixer port from PyTorch to MLX we audited every arithme
 
 ## Summary of Key Differences
 
-| Area | PyTorch Behaviour | MLX Behaviour | Impact |
-|------|-------------------|---------------|--------|
-| **FFT normalisation** | `irfft(..., norm='forward')` (no implicit scale) while manually dividing the kernel spectrum by `n = 2L` | `irfft(...)` applies `1/n` by default and we *must not* pre-divide the spectrum | Double scaling or missing scaling gives order-one amplitude errors; fixed by matching exactly one `1/n` in each profile |
-| **Kernel combine** | Time-domain pad + reverse + sum (default in the repo) | Selectable: time-domain sum (`torch_like`) or frequency-domain average (`mlx_stable`) | Different combine domains re-order additions; parity tests now switch via HyperProfile |
-| **Linear / depthwise ops** | GEMM / grouped conv implementations differ in accumulation order + FMA handling | Same issue on MLX (different kernels) | ~1e-7 relative drift purely from order-of-operations; acceptable but highlighted by tracer |
-| **float()/int() usage** | Casting tensors to Python scalars breaks the graph, forces CPU copies, and rounds twice | Same | Banned via EmberCoach/EmberLint Strict |
-| **numpy.fft** | Promotes to float64 and runs on CPU | N/A | Any parity test touching NumPy is invalid; removed |
-| **Device fallbacks** | MPSGraph FFT still has known accuracy TODO in PyTorch | MLX has custom Metal FFT | Even with matching formulas tiny MPS vs Metal diffs remain; solved via deterministic kernels and optional extended-precision path |
+| Area                       | PyTorch Behaviour                                                                                        | MLX Behaviour                                                                         | Impact                                                                                                                            |
+|----------------------------|----------------------------------------------------------------------------------------------------------|---------------------------------------------------------------------------------------|-----------------------------------------------------------------------------------------------------------------------------------|
+| **FFT normalisation**      | `irfft(..., norm='forward')` (no implicit scale) while manually dividing the kernel spectrum by `n = 2L` | `irfft(...)` applies `1/n` by default and we *must not* pre-divide the spectrum       | Double scaling or missing scaling gives order-one amplitude errors; fixed by matching exactly one `1/n` in each profile           |
+| **Kernel combine**         | Time-domain pad + reverse + sum (default in the repo)                                                    | Selectable: time-domain sum (`torch_like`) or frequency-domain average (`mlx_stable`) | Different combine domains re-order additions; parity tests now switch via HyperProfile                                            |
+| **Linear / depthwise ops** | GEMM / grouped conv implementations differ in accumulation order + FMA handling                          | Same issue on MLX (different kernels)                                                 | ~1e-7 relative drift purely from order-of-operations; acceptable but highlighted by tracer                                        |
+| **float()/int() usage**    | Casting tensors to Python scalars breaks the graph, forces CPU copies, and rounds twice                  | Same                                                                                  | Banned via EmberCoach/EmberLint Strict                                                                                            |
+| **numpy.fft**              | Promotes to float64 and runs on CPU                                                                      | N/A                                                                                   | Any parity test touching NumPy is invalid; removed                                                                                |
+| **Device fallbacks**       | MPSGraph FFT still has known accuracy TODO in PyTorch                                                    | MLX has custom Metal FFT                                                              | Even with matching formulas tiny MPS vs Metal diffs remain; solved via deterministic kernels and optional extended-precision path |
 
 ## What `float()` / `int()` Do (and Why We Banned Them)
 
@@ -26,14 +26,14 @@ We codified this with **EmberCoach** and **EmberLint Strict** – they error on 
 ## FFT Normalisation Rules
 
 ### Torch-like profile (`MLX_M2_PROFILE=torch_like`)
-```python
+```
 k_f = torch.fft.rfft(k_time, n=2 * L) / (2 * L)
 y = torch.fft.irfft(u_f * k_f, n=2 * L, norm='forward')[..., :L]
 ```
 Manual 1/n on the spectrum, no scaling on the inverse.
 
 ### MLX-stable profile (`MLX_M2_PROFILE=mlx_stable`)
-```python
+```
 k_f = mx.fft.rfft(k_time, n=2 * L)
 y = mx.fft.irfft(u_f * k_f, n=2 * L)[..., :L]  # MLX irfft applies 1/n
 ```

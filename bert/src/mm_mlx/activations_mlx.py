@@ -12,10 +12,13 @@ Usage
 - register_activation(name: str, fn: Callable)
 """
 
-import math
 from typing import Callable, Dict, Optional
 
 import mlx.core as mx
+try:
+    from ..math_ops import sqrt_2_over_pi  # type: ignore
+except Exception:
+    sqrt_2_over_pi = None
 
 
 # ---- Built-in primitives (float32 throughout) ----
@@ -56,12 +59,13 @@ def _gelu_erf(x: mx.array) -> mx.array:
 
 def _gelu_tanh(x: mx.array) -> mx.array:
     # Tanh approx (matches Torch approximate='tanh') using MLX ops only
-    two = mx.array(2.0, dtype=mx.float32)
-    pi = mx.array(3.141592653589793, dtype=mx.float32)
     half = mx.array(0.5, dtype=mx.float32)
     one = mx.array(1.0, dtype=mx.float32)
     c044715 = mx.array(0.044715, dtype=mx.float32)
-    c = mx.sqrt(mx.divide(two, pi))
+    if sqrt_2_over_pi is not None:
+        c = sqrt_2_over_pi() if callable(sqrt_2_over_pi) else sqrt_2_over_pi
+    else:
+        c = mx.sqrt(mx.divide(mx.array(2.0, dtype=mx.float32), mx.array(3.141592653589793, dtype=mx.float32)))
     # x^3 using MLX power
     x3 = mx.power(x, mx.array(3.0, dtype=x.dtype))
     inner = mx.add(x, mx.multiply(c044715, x3))

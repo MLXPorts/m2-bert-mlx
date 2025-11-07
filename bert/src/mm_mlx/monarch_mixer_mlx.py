@@ -21,6 +21,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .hyena_filter_mlx import HyenaFilter
+from .metal_kernels import depthwise_conv_3tap
 
 
 class MonarchMixerSequenceMixing(nn.Module):
@@ -142,37 +143,21 @@ class MonarchMixerSequenceMixing(nn.Module):
 
     def depthwise_conv1d(self, x, kernel_size=3, padding=2):
         """
-        Depthwise 1D convolution (manual implementation)
+        Depthwise 1D convolution using Metal kernel
 
         Args:
             x: (batch, channels, length)
-            kernel_size: Convolution kernel size
-            padding: Padding
+            kernel_size: Convolution kernel size (must be 3)
+            padding: Padding (ignored - kernel uses padding=1)
 
         Returns:
             out: (batch, channels, length)
         """
         batch, channels, length = x.shape
 
-        # Pad input
-        x_padded = mx.pad(x, [(0, 0), (0, 0), (padding, padding)])
-
-        # Apply depthwise conv manually (channel-wise)
-        outputs = []
-        for i in range(channels):
-            channel_data = x_padded[:, i:i + 1, :]  # (batch, 1, L+padding)
-            kernel = self.short_filter_weight[i, :]  # (kernel_size,)
-
-            conv_out = []
-            for t in range(length):
-                window = channel_data[:, 0, t:t + kernel_size]  # (batch, kernel_size)
-                out_val = mx.sum(window * kernel.reshape(1, -1), axis=1)  # (batch,)
-                conv_out.append(out_val)
-
-            conv_result = mx.stack(conv_out, axis=1)  # (batch, length)
-            outputs.append(conv_result)
-
-        result = mx.stack(outputs, axis=1)  # (batch, channels, length)
+        # Use Metal kernel for 3-tap depthwise conv
+        # Kernel implements padding=1 (zero-padding) internally
+        result = depthwise_conv_3tap(x, self.short_filter_weight)
         return result
 
     def __call__(self, u, tracer=None, **kwargs):

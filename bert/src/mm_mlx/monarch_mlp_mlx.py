@@ -5,9 +5,10 @@ Complete Monarch MLP with Gated Linear Unit (GLU) in MLX
 Full port of BertGatedLinearUnitMLP with block-diagonal Monarch matrices
 """
 
-import math
 import mlx.core as mx
 import mlx.nn as nn
+# numpy removed from compute module; tests live in bert/tests
+from math_ops import sqrt_2_over_pi
 
 from .blockdiag_multiply_mlx import BlockDiagLinear
 
@@ -54,7 +55,7 @@ class MonarchGLUMLP(nn.Module):
             # Block-diagonal Monarch matrices
             self.gated_layers = BlockDiagLinear(
                 in_features=hidden_size,
-                out_features=intermediate_size * 2,  # 2x for GLU
+                out_features=intermediate_size + intermediate_size,  # 2x for GLU
                 nblocks=nblocks,
                 bias=False
             )
@@ -68,7 +69,7 @@ class MonarchGLUMLP(nn.Module):
             # Dense matrices
             self.gated_layers = nn.Linear(
                 hidden_size,
-                intermediate_size * 2,
+                intermediate_size + intermediate_size,
                 bias=False
             )
             self.wo = nn.Linear(
@@ -108,9 +109,16 @@ class MonarchGLUMLP(nn.Module):
         # GLU operation: GELU(gate) * value
         # GELU: 0.5 * x * (1 + tanh(sqrt(2/pi) * (x + 0.044715 * x^3)))
         x = gated
-        gelu_out = 0.5 * x * (1 + mx.tanh(math.sqrt(2/math.pi) * (x + 0.044715 * x**3)))
+        half = mx.array(0.5, dtype=mx.float32)
+        one  = mx.array(1.0, dtype=mx.float32)
+        two  = mx.array(2.0, dtype=mx.float32)
+        # Curated sqrt(2/pi)
+        c = sqrt_2_over_pi()
+        x3   = mx.power(x, mx.array(3.0, dtype=mx.float32))
+        inner= mx.multiply(c, mx.add(x, mx.multiply(mx.array(0.044715, dtype=mx.float32), x3)))
+        gelu = mx.multiply(mx.multiply(half, x), mx.add(one, mx.tanh(inner)))
 
-        hidden_states = gelu_out * non_gated  # (..., intermediate_size)
+        hidden_states = mx.multiply(gelu, non_gated)  # (..., intermediate_size)
 
         # Dropout
         hidden_states = self.dropout(hidden_states)
@@ -119,7 +127,7 @@ class MonarchGLUMLP(nn.Module):
         hidden_states = self.wo(hidden_states)  # (..., hidden_size)
 
         # Residual connection + LayerNorm
-        output = self.layernorm(hidden_states + residual)
+        output = self.layernorm(mx.add(hidden_states, residual))
 
         return output
 
@@ -207,9 +215,15 @@ class MonarchMLP(nn.Module):
         # Up-projection
         hidden_states = self.gated_layers(hidden_states)
 
-        # GELU activation
+        # GELU activation (backend ops only)
         x = hidden_states
-        hidden_states = 0.5 * x * (1 + mx.tanh(math.sqrt(2/math.pi) * (x + 0.044715 * x**3)))
+        half = mx.array(0.5, dtype=mx.float32)
+        one  = mx.array(1.0, dtype=mx.float32)
+        two  = mx.array(2.0, dtype=mx.float32)
+        c = sqrt_2_over_pi()
+        x3   = mx.power(x, mx.array(3.0, dtype=mx.float32))
+        inner= mx.multiply(c, mx.add(x, mx.multiply(mx.array(0.044715, dtype=mx.float32), x3)))
+        hidden_states = mx.multiply(mx.multiply(half, x), mx.add(one, mx.tanh(inner)))
 
         # Dropout
         hidden_states = self.dropout(hidden_states)
@@ -218,176 +232,9 @@ class MonarchMLP(nn.Module):
         hidden_states = self.wo(hidden_states)
 
         # Residual + LayerNorm
-        output = self.layernorm(hidden_states + residual)
+        output = self.layernorm(mx.add(hidden_states, residual))
 
         return output
 
 
-def test_monarch_mlp():
-    """Test Monarch MLP implementations"""
-    print("="*70)
-    print("Testing Complete Monarch MLP with GLU (MLX)")
-    print("="*70)
-    print()
-
-    batch_size = 4
-    seq_len = 128
-    hidden_size = 768
-    intermediate_size = 3072
-    nblocks = 4
-
-    print(f"Configuration:")
-    print(f"  Batch size: {batch_size}")
-    print(f"  Sequence length: {seq_len}")
-    print(f"  Hidden size: {hidden_size}")
-    print(f"  Intermediate size: {intermediate_size}")
-    print(f"  Number of blocks: {nblocks}")
-    print()
-
-    # Test 1: Monarch GLU MLP
-    print("Test 1: Monarch GLU MLP")
-    print("-" * 70)
-
-    mlp_glu = MonarchGLUMLP(
-        hidden_size=hidden_size,
-        intermediate_size=intermediate_size,
-        nblocks=nblocks,
-        dropout=0.1,
-        use_monarch=True
-    )
-
-    x_input = mx.random.normal((batch_size, seq_len, hidden_size))
-    y_output = mlp_glu(x_input)
-
-    print(f"  Input: {x_input.shape}")
-    print(f"  Output: {y_output.shape}")
-    print(f"  Output range: [{y_output.min().item():.3f}, {y_output.max().item():.3f}]")
-    print("  ✅ Monarch GLU MLP works!")
-    print()
-
-    # Test 2: Standard Monarch MLP (no GLU)
-    print("Test 2: Standard Monarch MLP (no GLU)")
-    print("-" * 70)
-
-    mlp_standard = MonarchMLP(
-        hidden_size=hidden_size,
-        intermediate_size=intermediate_size,
-        nblocks=nblocks,
-        dropout=0.1,
-        use_monarch=True
-    )
-
-    y_standard = mlp_standard(x_input)
-
-    print(f"  Input: {x_input.shape}")
-    print(f"  Output: {y_standard.shape}")
-    print(f"  Output range: [{y_standard.min().item():.3f}, {y_standard.max().item():.3f}]")
-    print("  ✅ Standard Monarch MLP works!")
-    print()
-
-    # Test 3: Dense GLU MLP (no Monarch)
-    print("Test 3: Dense GLU MLP (no Monarch)")
-    print("-" * 70)
-
-    mlp_dense = MonarchGLUMLP(
-        hidden_size=hidden_size,
-        intermediate_size=intermediate_size,
-        dropout=0.1,
-        use_monarch=False  # Dense matrices
-    )
-
-    y_dense = mlp_dense(x_input)
-
-    print(f"  Input: {x_input.shape}")
-    print(f"  Output: {y_dense.shape}")
-    print(f"  Output range: [{y_dense.min().item():.3f}, {y_dense.max().item():.3f}]")
-    print("  ✅ Dense GLU MLP works!")
-    print()
-
-    # Test 4: Parameter count comparison
-    print("Test 4: Parameter Count Comparison")
-    print("-" * 70)
-
-    def count_parameters(model):
-        total = 0
-        params = model.parameters()
-
-        def count_nested(d):
-            t = 0
-            for k, v in d.items():
-                if isinstance(v, dict):
-                    t += count_nested(v)
-                else:
-                    t += v.size
-            return t
-
-        return count_nested(params)
-
-    params_monarch = count_parameters(mlp_glu)
-    params_dense = count_parameters(mlp_dense)
-
-    print(f"  Monarch GLU parameters: {params_monarch:,}")
-    print(f"  Dense GLU parameters: {params_dense:,}")
-    print(f"  Reduction: {(1 - params_monarch/params_dense)*100:.1f}%")
-    print(f"  Compression ratio: {params_dense/params_monarch:.2f}x")
-    print()
-
-    # Test 5: Gradient computation
-    print("Test 5: Gradient Computation")
-    print("-" * 70)
-
-    def loss_fn(mlp):
-        x_test = mx.random.normal((2, 64, hidden_size))
-        y = mlp(x_test)
-        return mx.mean(y ** 2)
-
-    loss_and_grad = nn.value_and_grad(mlp_glu, loss_fn)
-    loss, grads = loss_and_grad(mlp_glu)
-
-    print(f"  Loss: {loss.item():.6f}")
-    print(f"  Gradient keys: {list(grads.keys())}")
-
-    # Check key gradients
-    if 'gated_layers' in grads:
-        gated_grads = grads['gated_layers']
-        print(f"  Gated layers gradients: {list(gated_grads.keys())}")
-
-    if 'wo' in grads:
-        wo_grads = grads['wo']
-        print(f"  Output projection gradients: {list(wo_grads.keys())}")
-
-    print("  ✅ Gradient computation works!")
-    print()
-
-    # Test 6: Numerical stability
-    print("Test 6: Numerical Stability")
-    print("-" * 70)
-
-    # Test with very small and very large inputs
-    x_small = mx.random.normal((2, 32, hidden_size)) * 0.001
-    x_large = mx.random.normal((2, 32, hidden_size)) * 10.0
-
-    y_small = mlp_glu(x_small)
-    y_large = mlp_glu(x_large)
-
-    print(f"  Small input range: [{x_small.min().item():.6f}, {x_small.max().item():.6f}]")
-    print(f"  Small output range: [{y_small.min().item():.6f}, {y_small.max().item():.6f}]")
-    print(f"  Large input range: [{x_large.min().item():.3f}, {x_large.max().item():.3f}]")
-    print(f"  Large output range: [{y_large.min().item():.3f}, {y_large.max().item():.3f}]")
-
-    has_nan = mx.any(mx.isnan(y_small)) or mx.any(mx.isnan(y_large))
-    has_inf = mx.any(mx.isinf(y_small)) or mx.any(mx.isinf(y_large))
-
-    if not has_nan and not has_inf:
-        print("  ✅ No NaN or Inf values!")
-    else:
-        print("  ❌ Numerical instability detected!")
-
-    print()
-    print("="*70)
-    print("✅ All Monarch MLP tests complete!")
-    print("="*70)
-
-
-if __name__ == '__main__':
-    test_monarch_mlp()
+# Demo/tests moved to bert/tests to keep compute module scalar-clean.

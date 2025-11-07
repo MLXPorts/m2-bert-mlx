@@ -14,6 +14,7 @@ Key approach:
 import mlx.core as mx
 import mlx.nn as nn
 from typing import Dict, List, Tuple, Any
+from .metal_fft_conv import MetalFFTConv
 
 class StreamGradientComputation:
     """
@@ -205,37 +206,11 @@ def fft_conv_with_manual_grad(u, k, D, streams=None):
         device = mx.default_device()
         streams = [mx.new_stream(device) for _ in range(4)]
 
-    batch, d_model, seqlen = u.shape
-    fft_size = 2 * seqlen
-
-    # Forward pass (same as before, stream-based)
-    k_f = mx.fft.rfft(k, n=fft_size, axis=-1) / fft_size
-
-    CHANNEL_BATCH_SIZE = 64
-    bands = []
-    for ch_start in range(0, d_model, CHANNEL_BATCH_SIZE):
-        ch_end = min(ch_start + CHANNEL_BATCH_SIZE, d_model)
-        bands.append((ch_start, ch_end))
-
-    outputs = [None] * len(bands)
-    for idx, (ch_start, ch_end) in enumerate(bands):
-        st = streams[idx % len(streams)]
-
-        with mx.stream(st):
-            u_batch = u[:, ch_start:ch_end, :]
-            k_f_batch = k_f[ch_start:ch_end, :]
-
-            u_f = mx.fft.rfft(u_batch, n=fft_size, axis=-1)
-            y_f = u_f * k_f_batch[None, :, :]
-            y_batch = mx.fft.irfft(y_f, n=fft_size, axis=-1)[..., :seqlen]
-
-            outputs[idx] = y_batch
-
-    mx.synchronize()
-    y = mx.concatenate(outputs, axis=1)
-    y = y + u * D
-
-    return y
+    # Unified Metal kernel forward (no native MLX FFT). Autograd through this
+    # path is not provided here; this helper is forward-only.
+    if not hasattr(fft_conv_with_manual_grad, "_conv"):
+        fft_conv_with_manual_grad._conv = MetalFFTConv()
+    return fft_conv_with_manual_grad._conv(u, k, D)
 
 
 def manual_backward_fft_conv(grad_output, u, k, D, streams=None):
@@ -260,68 +235,8 @@ def manual_backward_fft_conv(grad_output, u, k, D, streams=None):
         device = mx.default_device()
         streams = [mx.new_stream(device) for _ in range(4)]
 
-    batch, d_model, seqlen = u.shape
-    fft_size = 2 * seqlen
-
-    # Gradient w.r.t. D (simple)
-    grad_D = mx.sum(grad_output * u, axis=(0, 2), keepdims=True)
-
-    # Gradient w.r.t. u from bias term
-    grad_u_bias = grad_output * D
-
-    # Gradient w.r.t. u and k from FFT convolution
-    # This is the complex part - need to implement chain rule through FFT
-
-    # For now, use MLX's automatic differentiation but on smaller chunks
-    CHANNEL_BATCH_SIZE = 64
-    bands = []
-    for ch_start in range(0, d_model, CHANNEL_BATCH_SIZE):
-        ch_end = min(ch_start + CHANNEL_BATCH_SIZE, d_model)
-        bands.append((ch_start, ch_end))
-
-    grad_u_fft_parts = [None] * len(bands)
-    grad_k_parts = [None] * len(bands)
-
-    k_f = mx.fft.rfft(k, n=fft_size, axis=-1) / fft_size
-
-    for idx, (ch_start, ch_end) in enumerate(bands):
-        st = streams[idx % len(streams)]
-
-        with mx.stream(st):
-            # Slice inputs and gradients for this band
-            u_batch = u[:, ch_start:ch_end, :]
-            k_batch = k[ch_start:ch_end, :]
-            k_f_batch = k_f[ch_start:ch_end, :]
-            grad_out_batch = grad_output[:, ch_start:ch_end, :]
-
-            # Use automatic differentiation on this small chunk
-            def fft_conv_batch(u_b, k_b):
-                u_f = mx.fft.rfft(u_b, n=fft_size, axis=-1)
-                k_f_b = mx.fft.rfft(k_b, n=fft_size, axis=-1) / fft_size
-                y_f = u_f * k_f_b[None, :, :]
-                y_b = mx.fft.irfft(y_f, n=fft_size, axis=-1)[..., :seqlen]
-                return y_b
-
-            # Compute gradients for this batch
-            grad_fn = mx.grad(fft_conv_batch, argnums=[0, 1])
-            grad_u_batch, grad_k_batch = grad_fn(u_batch, k_batch)
-
-            # Scale by incoming gradient
-            grad_u_batch = grad_u_batch * grad_out_batch
-            grad_k_batch = grad_k_batch * mx.sum(grad_out_batch, axis=0, keepdims=True)
-
-            grad_u_fft_parts[idx] = grad_u_batch
-            grad_k_parts[idx] = grad_k_batch
-
-    mx.synchronize()
-
-    # Combine gradients
-    grad_u_fft = mx.concatenate(grad_u_fft_parts, axis=1)
-    grad_k = mx.concatenate(grad_k_parts, axis=0)
-
-    grad_u = grad_u_fft + grad_u_bias
-
-    return grad_u, grad_k, grad_D
+    # Fail loudly as per project rules: no fallbacks to native FFT.
+    raise NotImplementedError("manual_backward_fft_conv is not implemented for the Metal kernel path.")
 
 
 if __name__ == '__main__':

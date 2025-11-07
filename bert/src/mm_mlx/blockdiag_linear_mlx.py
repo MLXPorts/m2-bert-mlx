@@ -6,7 +6,6 @@ Implements a structured linear: weight shaped (nblocks, out_blk, in_blk),
 applied over the input split into nblocks along the last dimension.
 """
 
-import math
 import mlx.core as mx
 import mlx.nn as nn
 from .blockdiag_ops_mlx import blockdiag_multiply

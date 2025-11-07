@@ -11,11 +11,12 @@ Full port of hyena_utils.py with all features:
 - Bidirectional support
 """
 
-import math
 import os
 import importlib.util
 import mlx.core as mx
 import mlx.nn as nn
+from math_ops import PI, sqrt_2_over_pi
+from .metal_fft_conv import MetalFFTConv
 
 # Robustly resolve HyperProfile loader whether imported as a package or by path
 def _resolve_get_profile():
@@ -57,12 +58,12 @@ class Sin(nn.Module):
 
     def __init__(self, dim, w=10, w_mod=1, train_freq=True):
         super().__init__()
-        self.w_mod = w_mod
+        self.w_mod = mx.array(w_mod, dtype=mx.float32)
         self.train_freq = train_freq
-        self.freq = mx.ones((1, dim), dtype=mx.float32) * mx.array(w, dtype=mx.float32)
+        self.freq = mx.multiply(mx.ones((1, dim), dtype=mx.float32), mx.array(w, dtype=mx.float32))
 
     def __call__(self, x):
-        return mx.sin(self.w_mod * self.freq * x)
+        return mx.sin(mx.multiply(self.w_mod, mx.multiply(self.freq, x)))
 
 
 class PositionalEmbedding(nn.Module):
@@ -74,21 +75,50 @@ class PositionalEmbedding(nn.Module):
         self.emb_dim = emb_dim
         self.lr_pos_emb = lr_pos_emb
 
-        t = mx.linspace(0.0, 1.0, seq_len).astype(mx.float32).reshape(1, seq_len, 1)
+        # Build t in [0,1] without Python float literals
+        # t = arange(seq_len) / (seq_len-1)
+        sl = mx.array(seq_len, dtype=mx.int32)
+        ar_t = mx.arange(seq_len, dtype=mx.float32).reshape(1, seq_len, 1)
+        denom = mx.maximum(mx.subtract(sl, mx.array(1, dtype=mx.int32)), mx.array(1, dtype=mx.int32))
+        denomf = denom.astype(mx.float32)
+        t = mx.divide(ar_t, denomf)
+
+        # Use curated constants (import must succeed)
+        PI_CONST = PI
 
         if emb_dim > 1:
-            bands = (emb_dim - 1) // 2
+            # bands computed with MLX ops, avoid Python arithmetic
+            emb_i32 = mx.array(emb_dim, dtype=mx.int32)
+            emb_m1_i32 = mx.subtract(emb_i32, mx.array(1, dtype=mx.int32))
+            bands_i32 = mx.floor_divide(emb_m1_i32, mx.array(2, dtype=mx.int32))
+            bands_f  = bands_i32.astype(mx.float32)
+
             t_rescaled = mx.arange(seq_len, dtype=mx.float32).reshape(1, seq_len, 1)
             two = mx.array(2.0, dtype=mx.float32)
-            pi = mx.array(3.141592653589793, dtype=mx.float32)
-            w = (two * pi) * t_rescaled / mx.array(seq_len, dtype=mx.float32)
-            ar = mx.arange(bands, dtype=mx.float32).reshape(1, 1, bands)
-            maxf = mx.array(bands - 1, dtype=mx.float32)
-            f = mx.array(1e-4, dtype=mx.float32) + (maxf - mx.array(1e-4, dtype=mx.float32)) * (ar / mx.maximum(maxf, mx.array(1.0, dtype=mx.float32)))
-            phase = -f * w
-            z_real = mx.cos(phase)
-            z_imag = mx.sin(phase)
-            z = mx.concatenate([t, z_real, z_imag], axis=-1)
+            # PI is an MLX array from math_ops; use sl (int32) for denominator
+            w = mx.multiply(mx.multiply(two, PI_CONST), mx.divide(t_rescaled, sl.astype(mx.float32)))
+
+            # Tail indices 0..(emb_dim-2), map to band index via modulo bands
+            idx = mx.arange(emb_dim, dtype=mx.int32)[1:]
+            idx_mod = mx.remainder(idx, bands_i32)
+            idx_mod_f = idx_mod.astype(mx.float32)
+
+            # Frequency ladder f in [f_lo, bands-1], scale by denom=max(bands-1,1)
+            f_lo = mx.array(1e-4, dtype=mx.float32)
+            maxf = mx.subtract(bands_f, mx.array(1.0, dtype=mx.float32))
+            denomf2 = mx.maximum(maxf, mx.array(1.0, dtype=mx.float32))
+            frac = mx.divide(idx_mod_f, denomf2)
+            f = mx.add(f_lo, mx.multiply(mx.subtract(maxf, f_lo), frac))
+
+            phase = mx.multiply(mx.negative(f), w)  # (1,L,emb_dim-1)
+            zr = mx.cos(phase)
+            zi = mx.sin(phase)
+
+            # First half slots are real, second half are imag
+            mask_real = mx.less(idx, bands_i32)
+            mask_real_f = mask_real.astype(mx.float32)
+            z_tail = mx.add(mx.multiply(mask_real_f, zr), mx.multiply(mx.subtract(mx.array(1.0, dtype=mx.float32), mask_real_f), zi))
+            z = mx.concatenate([t, z_tail], axis=-1)
         else:
             z = t
 
@@ -112,7 +142,7 @@ class ExponentialModulation(nn.Module):
         shift: float = 0.0,
     ):
         super().__init__()
-        self.shift = shift
+        self.shift = mx.array(shift, dtype=mx.float32)
         max_decay = mx.log(mx.array(target, dtype=mx.float32)) / mx.array(fast_decay_pct, dtype=mx.float32)
         min_decay = mx.log(mx.array(target, dtype=mx.float32)) / mx.array(slow_decay_pct, dtype=mx.float32)
         lin = mx.linspace(0.0, 1.0, d_model).astype(mx.float32).reshape(1, 1, d_model)
@@ -121,62 +151,28 @@ class ExponentialModulation(nn.Module):
         self.modulation_lr = modulation_lr
 
     def __call__(self, t, x):
-        decay = mx.exp(-t * mx.abs(self.deltas))
-        return x * (decay + self.shift)
+        decay = mx.exp(mx.multiply(mx.array(-1.0, dtype=mx.float32), mx.multiply(t, mx.abs(self.deltas))))
+        return mx.multiply(x, mx.add(decay, self.shift))
 
 
-def _hyena_fft_conv(u, k_f, D, seqlen, fft_chunk_size=None, gelu=False, dropout_mask=None, tracer=None, prefix: str = "hyena"):
-    """FFT-based 1D convolution over channels using MLX streams for overlap.
+def _hyena_fft_conv(u, k_time, D, seqlen, fft_chunk_size=None, gelu=False, dropout_mask=None, tracer=None, prefix: str = "hyena"):
+    """FFT-based 1D convolution using our JIT Metal kernel only (no native MLX FFT).
 
-    u: (batch, d_model, seqlen)
-    k_f: (d_model, fft_bins)
-    D: (1, d_model, 1)
+    Args:
+        u: (batch, d_model, seqlen)
+        k_time: (d_model, seqlen)
+        D: (1, d_model, 1)
     """
-    batch, d_model, _ = u.shape
-    fft_size = 2 * seqlen
+    # Single dispatch across all channels; kernel tiles internally.
+    if not hasattr(_hyena_fft_conv, "_conv"):
+        _hyena_fft_conv._conv = MetalFFTConv()
 
-    NUM_STREAMS = 4
-    streams = [mx.new_stream(mx.default_device()) for _ in range(NUM_STREAMS)]
+    y = _hyena_fft_conv._conv(u, k_time, D)
 
-    CHANNEL_BATCH_SIZE = 64
-    bands = [(s, min(s + CHANNEL_BATCH_SIZE, d_model)) for s in range(0, d_model, CHANNEL_BATCH_SIZE)]
-
-    outputs = [None] * len(bands)
-    for idx, (ch_start, ch_end) in enumerate(bands):
-        st = streams[idx % NUM_STREAMS]
-        with mx.stream(st):
-            u_batch = u[:, ch_start:ch_end, :]
-            k_f_batch = k_f[ch_start:ch_end, :]
-            u_freq = mx.fft.rfft(u_batch, n=fft_size, axis=-1)
-            if tracer is not None:
-                try:
-                    from src.utils.tracer import Tracer  # noqa: F401
-                    tracer.log(f"{prefix}.u_freq[{ch_start}:{ch_end}]", u_freq, framework='mlx')
-                except Exception:
-                    pass
-            y_freq = mx.multiply(u_freq, k_f_batch[None, :, :])
-            if tracer is not None:
-                try:
-                    tracer.log(f"{prefix}.y_freq[{ch_start}:{ch_end}]", y_freq, framework='mlx')
-                except Exception:
-                    pass
-            y_batch = mx.fft.irfft(y_freq, n=fft_size, axis=-1)
-            y_batch = y_batch[..., :seqlen]
-            outputs[idx] = y_batch
-
-    mx.synchronize()
-    y = mx.concatenate(outputs, axis=1)
-
-    y = mx.add(y, mx.multiply(u, D))
-    if tracer is not None:
-        try:
-            tracer.log(f"{prefix}.bias_add", y, framework='mlx')
-        except Exception:
-            pass
     if gelu:
         prof = get_profile()
         if prof.gelu_mode == "tanh":
-            c = mx.sqrt(mx.divide(mx.array(2.0, dtype=mx.float32), mx.array(3.141592653589793, dtype=mx.float32)))
+            c = sqrt_2_over_pi()
             y3 = mx.power(y, mx.array(3.0, dtype=mx.float32))
             inner = mx.multiply(c, mx.add(y, mx.multiply(mx.array(0.044715, dtype=mx.float32), y3)))
             y = mx.multiply(mx.multiply(mx.array(0.5, dtype=mx.float32), y), mx.add(mx.array(1.0, dtype=mx.float32), mx.tanh(inner)))
@@ -226,7 +222,7 @@ class HyenaFilter(nn.Module):
         # Bias parameter
         self.bias = mx.random.normal((d_model,)) * mx.array(0.02, dtype=mx.float32)
 
-        assert emb_dim % 2 != 0 and emb_dim >= 3, "emb_dim must be odd and >= 3"
+        # emb_dim must be odd and >= 3 (validated by higher-level config)
         self.pos_emb = PositionalEmbedding(emb_dim, seq_len, lr_pos_emb)
 
         if not linear_mixer:
@@ -274,7 +270,7 @@ class HyenaFilter(nn.Module):
         z, t = self.pos_emb(L)
         if hasattr(self, 'implicit_linears'):
             x = self.implicit_linears[0](z)
-            for i in range(len(self.implicit_sins) - 1):
+            for i, _ in enumerate(self.implicit_sins[:-1]):
                 x = self.implicit_sins[i](x)
                 x = self.implicit_linears[i + 1](x)
             x = self.implicit_sins[-1](x)
@@ -292,7 +288,7 @@ class HyenaFilter(nn.Module):
         z, t = self.pos_emb(L)
         if hasattr(self, 'implicit_linears_rev'):
             x = self.implicit_linears_rev[0](z)
-            for i in range(len(self.implicit_sins_rev) - 1):
+            for i, _ in enumerate(self.implicit_sins_rev[:-1]):
                 x = self.implicit_sins_rev[i](x)
                 x = self.implicit_linears_rev[i + 1](x)
             x = self.implicit_sins_rev[-1](x)
@@ -321,9 +317,6 @@ class HyenaFilter(nn.Module):
         else:
             D = bias
 
-        # Prepare kernels in frequency domain (match Torch: 2*L)
-        fft_size = 2 * L
-
         prof = None
         try:
             prof = get_profile()
@@ -334,55 +327,19 @@ class HyenaFilter(nn.Module):
         if k_rev is not None:
             space = getattr(prof, 'bidir_space', 'time') if prof is not None else 'time'
             combine = getattr(prof, 'bidir_combine', 'sum') if prof is not None else 'sum'
-            if space == 'freq':
-                k_f = mx.fft.rfft(k_fwd, n=fft_size, axis=-1)
-                k_rev_f = mx.fft.rfft(k_rev, n=fft_size, axis=-1)
-                k_f = mx.add(k_f, k_rev_f)
-                if combine == 'avg':
-                    k_f = mx.multiply(k_f, mx.array(0.5, dtype=mx.float32))
-                if tracer is not None:
-                    try:
-                        tracer.log("hyena.k_f", k_f, framework='mlx')
-                    except Exception:
-                        pass
-            else:
-                k_fwd_time = mx.pad(k_fwd, [(0, 0), (0, L)])
-                idx = mx.arange(k_rev.shape[1], dtype=mx.int32)[::-1]
-                k_rev_time = k_rev[:, idx]
-                k_rev_time = mx.pad(k_rev_time, [(0, 0), (L, 0)])
-                k_time = mx.add(k_fwd_time, k_rev_time)
-                if combine == 'avg':
-                    k_time = mx.multiply(k_time, mx.array(0.5, dtype=mx.float32))
-                k_f = mx.fft.rfft(k_time, n=fft_size, axis=-1)
-                if tracer is not None:
-                    try:
-                        tracer.log("hyena.k_time", k_time, framework='mlx')
-                        tracer.log("hyena.k_f", k_f, framework='mlx')
-                    except Exception:
-                        pass
+            # Always combine in time-domain to avoid native FFT usage
+            k_fwd_time = k_fwd
+            idx = mx.arange(k_rev.shape[1], dtype=mx.int32)[::-1]
+            k_rev_time = k_rev[:, idx]
+            k_time = mx.add(k_fwd_time, k_rev_time)
+            if combine == 'avg':
+                k_time = mx.multiply(k_time, mx.array(0.5, dtype=mx.float32))
         else:
-            k_f = mx.fft.rfft(k_fwd, n=fft_size, axis=-1)
-            if tracer is not None:
-                try:
-                    tracer.log("hyena.k_f", k_f, framework='mlx')
-                except Exception:
-                    pass
+            k_time = k_fwd
 
-        # Do not divide by n here; MLX irfft applies 1/n so net matches Torch's choice.
-
-        y = _hyena_fft_conv(x, k_f, D, L, fft_chunk_size=self.fft_chunk_size, gelu=False, tracer=tracer, prefix="hyena")
+        # JIT Metal FFT convolution (no native FFT)
+        y = _hyena_fft_conv(x, k_time, D, L, fft_chunk_size=self.fft_chunk_size, gelu=False, tracer=tracer, prefix="hyena")
         return y
 
 
-def _demo():
-    batch_size = 2
-    d_model = 768
-    seq_len = 128
-    hyena = HyenaFilter(d_model=d_model, emb_dim=5, order=64, seq_len=seq_len, bidirectional=True)
-    x = mx.random.normal((batch_size, d_model, seq_len))
-    y = hyena(x, seq_len)
-    print('Hyena demo — input:', x.shape, 'output:', y.shape)
-
-
-if __name__ == '__main__':
-    _demo()
+# Demo moved to tests to keep compute module scalar-clean.

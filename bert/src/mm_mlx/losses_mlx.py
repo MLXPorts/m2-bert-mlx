@@ -35,7 +35,8 @@ class MultipleNegativesRankingLoss:
     """
 
     def __init__(self, scale: float = 20.0):
-        self.scale = scale
+        # Keep MLX-typed constant for all math
+        self.scale = mx.array(scale, dtype=mx.float32)
 
     def cosine_similarity(self, a: mx.array, b: mx.array) -> mx.array:
         """
@@ -48,9 +49,13 @@ class MultipleNegativesRankingLoss:
         Returns:
             similarity: (batch_size, batch_size) - similarity matrix
         """
-        # Normalize
-        a_norm = a / mx.sqrt(mx.sum(a ** 2, axis=1, keepdims=True))
-        b_norm = b / mx.sqrt(mx.sum(b ** 2, axis=1, keepdims=True))
+        # Normalize (pure MLX ops)
+        a_sq = mx.power(a, mx.array(2.0, dtype=mx.float32))
+        b_sq = mx.power(b, mx.array(2.0, dtype=mx.float32))
+        a_den = mx.sqrt(mx.sum(a_sq, axis=1, keepdims=True))
+        b_den = mx.sqrt(mx.sum(b_sq, axis=1, keepdims=True))
+        a_norm = mx.divide(a, a_den)
+        b_norm = mx.divide(b, b_den)
 
         # Compute similarity
         similarity = a_norm @ b_norm.T  # (batch_size, batch_size)
@@ -74,8 +79,8 @@ class MultipleNegativesRankingLoss:
         # similarity[i, j] = cosine(anchor_i, positive_j)
         similarity = self.cosine_similarity(anchors, positives)
 
-        # Scale by temperature
-        similarity = similarity * self.scale
+        # Scale by temperature (MLX scalar)
+        similarity = mx.multiply(similarity, self.scale)
 
         # Labels: each anchor i should match positive i
         # So labels = [0, 1, 2, ..., batch_size-1]
@@ -143,19 +148,23 @@ class TripletLoss:
     """
 
     def __init__(self, margin: float = 0.5, distance_metric: str = 'cosine'):
-        self.margin = margin
+        self.margin = mx.array(margin, dtype=mx.float32)
         self.distance_metric = distance_metric
 
     def cosine_distance(self, a: mx.array, b: mx.array) -> mx.array:
         """Cosine distance (1 - cosine_similarity)"""
-        similarity = mx.sum(a * b, axis=1) / (
-            mx.sqrt(mx.sum(a ** 2, axis=1)) * mx.sqrt(mx.sum(b ** 2, axis=1))
+        num = mx.sum(mx.multiply(a, b), axis=1)
+        den = mx.multiply(
+            mx.sqrt(mx.sum(mx.power(a, mx.array(2.0, dtype=mx.float32)), axis=1)),
+            mx.sqrt(mx.sum(mx.power(b, mx.array(2.0, dtype=mx.float32)), axis=1)),
         )
-        return 1 - similarity
+        similarity = mx.divide(num, den)
+        return mx.subtract(mx.array(1.0, dtype=mx.float32), similarity)
 
     def euclidean_distance(self, a: mx.array, b: mx.array) -> mx.array:
         """Euclidean distance"""
-        return mx.sqrt(mx.sum((a - b) ** 2, axis=1))
+        diff = mx.subtract(a, b)
+        return mx.sqrt(mx.sum(mx.power(diff, mx.array(2.0, dtype=mx.float32)), axis=1))
 
     def __call__(
         self,
@@ -182,7 +191,10 @@ class TripletLoss:
             dist_neg = self.euclidean_distance(anchors, negatives)
 
         # Triplet loss: max(0, dist_pos - dist_neg + margin)
-        losses = mx.maximum(dist_pos - dist_neg + self.margin, 0)
+        losses = mx.maximum(
+            mx.add(mx.subtract(dist_pos, dist_neg), self.margin),
+            mx.array(0.0, dtype=mx.float32),
+        )
 
         return mx.mean(losses)
 
@@ -199,7 +211,7 @@ class ContrastiveLoss:
     """
 
     def __init__(self, margin: float = 0.5):
-        self.margin = margin
+        self.margin = mx.array(margin, dtype=mx.float32)
 
     def __call__(
         self,
@@ -219,117 +231,22 @@ class ContrastiveLoss:
             loss: scalar
         """
         # Euclidean distance
-        distances = mx.sqrt(mx.sum((embeddings1 - embeddings2) ** 2, axis=1))
+        diff = mx.subtract(embeddings1, embeddings2)
+        distances = mx.sqrt(mx.sum(mx.power(diff, mx.array(2.0, dtype=mx.float32)), axis=1))
 
         # Positive pairs: minimize distance
-        loss_positive = labels * (distances ** 2)
+        loss_positive = mx.multiply(labels, mx.power(distances, mx.array(2.0, dtype=mx.float32)))
 
         # Negative pairs: maximize distance up to margin
-        loss_negative = (1 - labels) * mx.maximum(self.margin - distances, 0) ** 2
+        one = mx.array(1.0, dtype=mx.float32)
+        loss_negative = mx.multiply(
+            mx.subtract(one, labels),
+            mx.power(mx.maximum(mx.subtract(self.margin, distances), mx.array(0.0, dtype=mx.float32)), mx.array(2.0, dtype=mx.float32)),
+        )
 
-        loss = mx.mean(loss_positive + loss_negative) / 2
+        loss = mx.divide(mx.mean(mx.add(loss_positive, loss_negative)), mx.array(2.0, dtype=mx.float32))
 
         return loss
 
 
-def test_losses():
-    """Test loss functions"""
-    print("="*70)
-    print("Testing MLX Loss Functions")
-    print("="*70)
-    print()
-
-    batch_size = 4
-    hidden_size = 768
-
-    # Test 1: Multiple Negatives Ranking Loss
-    print("Test 1: Multiple Negatives Ranking Loss")
-    print("-" * 70)
-
-    mnr_loss = MultipleNegativesRankingLoss(scale=20.0)
-
-    anchors = mx.random.normal((batch_size, hidden_size))
-    positives = mx.random.normal((batch_size, hidden_size))
-
-    loss = mnr_loss(anchors, positives)
-
-    print(f"  Anchors shape: {anchors.shape}")
-    print(f"  Positives shape: {positives.shape}")
-    print(f"  Loss: {loss.item():.6f}")
-    print(f"  ✅ Multiple Negatives Ranking Loss works!")
-    print()
-
-    # Test 2: Cached version
-    print("Test 2: Cached Multiple Negatives Ranking Loss")
-    print("-" * 70)
-
-    cached_loss = CachedMultipleNegativesRankingLoss(scale=20.0, mini_batch_size=2)
-
-    loss_cached = cached_loss(anchors, positives)
-
-    print(f"  Loss (cached): {loss_cached.item():.6f}")
-    print(f"  Loss (standard): {loss.item():.6f}")
-    print(f"  Difference: {abs(loss_cached.item() - loss.item()):.6f}")
-    print(f"  ✅ Cached loss works!")
-    print()
-
-    # Test 3: Triplet Loss
-    print("Test 3: Triplet Loss")
-    print("-" * 70)
-
-    triplet_loss = TripletLoss(margin=0.5, distance_metric='cosine')
-
-    negatives = mx.random.normal((batch_size, hidden_size))
-
-    loss_triplet = triplet_loss(anchors, positives, negatives)
-
-    print(f"  Anchors: {anchors.shape}")
-    print(f"  Positives: {positives.shape}")
-    print(f"  Negatives: {negatives.shape}")
-    print(f"  Loss: {loss_triplet.item():.6f}")
-    print(f"  ✅ Triplet Loss works!")
-    print()
-
-    # Test 4: Contrastive Loss
-    print("Test 4: Contrastive Loss")
-    print("-" * 70)
-
-    contrastive_loss = ContrastiveLoss(margin=0.5)
-
-    # Half positive pairs, half negative pairs
-    labels = mx.array([1, 1, 0, 0], dtype=mx.float32)
-
-    loss_contrastive = contrastive_loss(anchors, positives, labels)
-
-    print(f"  Embeddings1: {anchors.shape}")
-    print(f"  Embeddings2: {positives.shape}")
-    print(f"  Labels: {labels}")
-    print(f"  Loss: {loss_contrastive.item():.6f}")
-    print(f"  ✅ Contrastive Loss works!")
-    print()
-
-    # Test 5: Gradient computation
-    print("Test 5: Gradient Computation")
-    print("-" * 70)
-
-    def loss_fn(anchors, positives):
-        return mnr_loss(anchors, positives)
-
-    # Compute gradients
-    grad_fn = mx.grad(loss_fn, argnums=[0, 1])
-    grads_anchor, grads_positive = grad_fn(anchors, positives)
-
-    print(f"  Anchor gradients shape: {grads_anchor.shape}")
-    print(f"  Positive gradients shape: {grads_positive.shape}")
-    print(f"  Anchor gradient norm: {mx.sqrt(mx.sum(grads_anchor ** 2)).item():.6f}")
-    print(f"  Positive gradient norm: {mx.sqrt(mx.sum(grads_positive ** 2)).item():.6f}")
-    print(f"  ✅ Gradients computed correctly!")
-    print()
-
-    print("="*70)
-    print("✅ All loss function tests complete!")
-    print("="*70)
-
-
-if __name__ == '__main__':
-    test_losses()
+# Tests moved to bert/tests to keep this module compute-only and scalar-clean.
