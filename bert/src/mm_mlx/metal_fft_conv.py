@@ -84,10 +84,16 @@ inline uint bit_reverse(uint x, uint logn) {
 }
 
 // In-place iterative FFT/IFFT in threadgroup memory
+inline float2 dd2_mul_f(float2 a, float f) {
+    float2 p = dd2_two_prod(a.x, f);
+    p.y += a.y * f;
+    return dd2_quick_two_sum(p.x, p.y);
+}
+
 inline void fft_inplace_global_table(
     device float* re, device float* im,
     threadgroup const float* Twr, threadgroup const float* Twi,
-    uint N, uint tid, uint tpg, bool inverse
+    uint N, uint tid, uint tpg, bool inverse, bool dd_bfly
 ) {
     // Bit reversal permutation in global memory
     uint logn = 0u; { uint n = N; while (n > 1u) { n >>= 1u; ++logn; } }
@@ -108,7 +114,7 @@ inline void fft_inplace_global_table(
         uint stride = N / m;
         uint blocks = N / m;
 
-        // Each thread iterates its own j across all blocks
+        // Each thread iterates its own j across all blocks; fetch W_j per j (stable)
         for (uint j = tid; j < halfm; j += tpg) {
             uint tw_idx = j * stride; // W^(j*stride)
             float cw = Twr[tw_idx];
@@ -117,12 +123,30 @@ inline void fft_inplace_global_table(
             for (uint g = 0u; g < blocks; ++g) {
                 uint idx1 = g * m + j;
                 uint idx2 = idx1 + halfm;
-                float r2 = re[idx2], i2 = im[idx2];
-                float tr = cw * r2 - sw * i2;
-                float ti = cw * i2 + sw * r2;
-                float ur = re[idx1], ui = im[idx1];
-                re[idx1] = ur + tr; im[idx1] = ui + ti;
-                re[idx2] = ur - tr; im[idx2] = ui - ti;
+                if (!dd_bfly) {
+                    float r2 = re[idx2], i2 = im[idx2];
+                    float tr = cw * r2 - sw * i2;
+                    float ti = cw * i2 + sw * r2;
+                    float ur = re[idx1], ui = im[idx1];
+                    re[idx1] = ur + tr; im[idx1] = ui + ti;
+                    re[idx2] = ur - tr; im[idx2] = ui - ti;
+                } else {
+                    // Double-double butterfly using float2
+                    float2 ur = float2(re[idx1], 0.0f);
+                    float2 ui = float2(im[idx1], 0.0f);
+                    float2 r2 = float2(re[idx2], 0.0f);
+                    float2 i2 = float2(im[idx2], 0.0f);
+                    // t = w * (r2 + i*i2)
+                    float2 tr = dd2_sub(dd2_mul_f(r2, cw), dd2_mul_f(i2, sw));
+                    float2 ti = dd2_add(dd2_mul_f(r2, sw), dd2_mul_f(i2, cw));
+                    // u +/- t
+                    float2 r1 = dd2_add(ur, tr);
+                    float2 i1 = dd2_add(ui, ti);
+                    float2 r0 = dd2_sub(ur, tr);
+                    float2 i0 = dd2_sub(ui, ti);
+                    re[idx1] = dd2_to_float(r1); im[idx1] = dd2_to_float(i1);
+                    re[idx2] = dd2_to_float(r0); im[idx2] = dd2_to_float(i0);
+                }
             }
         }
         threadgroup_barrier(mem_flags::mem_threadgroup);
@@ -161,10 +185,12 @@ _FFTCONV_SOURCE = r"""
     uint k_base  = c * L;
     uint f_base  = (b * C + c) * N; // workspace spectra per (b,c)
 
-    // flags: bit0=dd_mode, bit2=dd_vec (float2-backed)
+    // flags: bit0=dd_mode, bit2=dd_vec (float2-backed), bit3=hermitian_exact, bit4=comp_bfly
     uint flags_v = flags[0];
     bool dd_mode = (flags_v & 1u) != 0u;
     bool dd_vec = (flags_v & 4u) != 0u;
+    bool hermitian_exact = (flags_v & 8u) != 0u;
+    bool comp_bfly = (flags_v & 16u) != 0u;
 
     // Precompute twiddle tables in threadgroup memory (size N/2)
     threadgroup float Twr[MAX_TW];
@@ -190,7 +216,10 @@ _FFTCONV_SOURCE = r"""
         Ki[f_base + i] = 0.0f;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    fft_inplace_global_table(&Kr[f_base], &Ki[f_base], Twr, Twi, N, tid, tpg, /*inverse=*/ false);
+    fft_inplace_global_table(&Kr[f_base], &Ki[f_base], Twr, Twi, N, tid, tpg, /*inverse=*/ false, comp_bfly);
+    if (hermitian_exact) {
+        if (tid == 0u) { Ki[f_base + 0u] = 0.0f; if ((N & 1u) == 0u) { Ki[f_base + (N >> 1)] = 0.0f; } }
+    }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // 2) U: time → freq
@@ -200,7 +229,10 @@ _FFTCONV_SOURCE = r"""
         Ui[f_base + i] = 0.0f;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
-    fft_inplace_global_table(&Ur[f_base], &Ui[f_base], Twr, Twi, N, tid, tpg, /*inverse=*/ false);
+    fft_inplace_global_table(&Ur[f_base], &Ui[f_base], Twr, Twi, N, tid, tpg, /*inverse=*/ false, comp_bfly);
+    if (hermitian_exact) {
+        if (tid == 0u) { Ui[f_base + 0u] = 0.0f; if ((N & 1u) == 0u) { Ui[f_base + (N >> 1)] = 0.0f; } }
+    }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // 3) Pointwise multiply in freq domain: U *= K → in-place on U
@@ -229,7 +261,7 @@ _FFTCONV_SOURCE = r"""
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     // 4) IFFT(U) and write y (take first L) with per-channel bias
-    fft_inplace_global_table(&Ur[f_base], &Ui[f_base], Twr, Twi, N, tid, tpg, /*inverse=*/ true);
+    fft_inplace_global_table(&Ur[f_base], &Ui[f_base], Twr, Twi, N, tid, tpg, /*inverse=*/ true, comp_bfly);
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
     float bias = D[c];
@@ -264,12 +296,14 @@ class MetalFFTConv(nn.Module):
     Always uses our compiled kernel; no fallbacks. Kernels are compiled once globally.
     """
 
-    def __init__(self, match_torch: bool = False, dd_mode: bool = False, dd_vec: bool = True):
+    def __init__(self, match_torch: bool = False, dd_mode: bool = False, dd_vec: bool = True, hermitian_exact: bool = True, comp_bfly: bool = False):
         super().__init__()
         # If True, we may switch multiply path to pure f32 in future; kernel is already f32.
         self.match_torch = match_torch
         self.dd_mode = dd_mode
         self.dd_vec = dd_vec
+        self.hermitian_exact = hermitian_exact
+        self.comp_bfly = comp_bfly if dd_mode else False
         self.kernel = _get_fftconv_kernel()
         # No host twiddle cache needed; computed per-launch in kernel
 
@@ -309,8 +343,14 @@ class MetalFFTConv(nn.Module):
         y_flat_shape = (y_elems,)
         work_shape = (n_elems,)
 
-        # Flags: bit0=dd_mode, bit2=dd_vec (twiddles built in kernel)
-        flags = mx.array(int(self.dd_mode) | (int(self.dd_vec) << 2), dtype=mx.uint32)
+        # Flags: bit0=dd_mode, bit2=dd_vec, bit3=hermitian_exact, bit4=comp_bfly
+        flags = mx.array(
+            int(self.dd_mode)
+            | (int(self.dd_vec) << 2)
+            | (int(self.hermitian_exact) << 3)
+            | (int(self.comp_bfly) << 4),
+            dtype=mx.uint32,
+        )
 
         (y_flat, _ur, _ui, _kr, _ki) = self.kernel(
             inputs=[params, u_flat, k_flat, D_plane.reshape(-1), flags.reshape(-1)],
