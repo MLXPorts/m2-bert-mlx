@@ -107,8 +107,49 @@ inline void fft_inplace_global_table(
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
+    // Optional Torch-like early stages (radix-2 then radix-4)
+    uint s_begin = 1u;
+    if (logn >= 2u) {
+        // Stage s=1 (m=2): pairs (0,1),(2,3),...
+        for (uint p = tid; p < (N >> 1); p += tpg) {
+            uint idx1 = (p << 1);
+            uint idx2 = idx1 + 1u;
+            float ur = re[idx1], ui = im[idx1];
+            float vr = re[idx2], vi = im[idx2];
+            re[idx1] = ur + vr; im[idx1] = ui + vi;
+            re[idx2] = ur - vr; im[idx2] = ui - vi;
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+
+        // Stage s=2 (m=4): j=0 (w=1), j=1 (w = (0,-1) for forward, (0,1) for inverse)
+        float sw1 = inverse ? 1.0f : -1.0f; // sin for j=1 twiddle; cos = 0
+        for (uint p = tid; p < (N >> 2); p += tpg) {
+            uint base = (p << 2);
+            // j=0: (base, base+2)
+            {
+                uint i1 = base; uint i2 = base + 2u;
+                float ur = re[i1], ui = im[i1];
+                float vr = re[i2], vi = im[i2];
+                re[i1] = ur + vr; im[i1] = ui + vi;
+                re[i2] = ur - vr; im[i2] = ui - vi;
+            }
+            // j=1: (base+1, base+3) with w=(0,sw1)
+            {
+                uint i1 = base + 1u; uint i2 = base + 3u;
+                float ur = re[i1], ui = im[i1];
+                float vr = re[i2], vi = im[i2];
+                float tr = -sw1 * vi;
+                float ti =  sw1 * vr;
+                re[i1] = ur + tr; im[i1] = ui + ti;
+                re[i2] = ur - tr; im[i2] = ui - ti;
+            }
+        }
+        threadgroup_barrier(mem_flags::mem_threadgroup);
+        s_begin = 3u;
+    }
+
     // Stages with twiddle table: W_N^(j*stride)
-    for (uint s = 1u; s <= logn; ++s) {
+    for (uint s = s_begin; s <= logn; ++s) {
         uint m = (1u << s);
         uint halfm = (m >> 1u);
         uint stride = N / m;
