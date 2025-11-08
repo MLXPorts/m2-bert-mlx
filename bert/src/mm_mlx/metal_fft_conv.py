@@ -226,12 +226,9 @@ _FFTCONV_SOURCE = r"""
     uint k_base  = c * L;
     uint f_base  = (b * C + c) * N; // workspace spectra per (b,c)
 
-    // flags: bit0=dd_mode, bit2=dd_vec (float2-backed), bit3=hermitian_exact, bit4=comp_bfly
-    uint flags_v = flags[0];
-    bool dd_mode = (flags_v & 1u) != 0u;
-    bool dd_vec = (flags_v & 4u) != 0u;
-    bool hermitian_exact = (flags_v & 8u) != 0u;
-    bool comp_bfly = (flags_v & 16u) != 0u;
+    // Precision-first path (no runtime flags)
+    const bool hermitian_exact = true;
+    const bool comp_bfly = true;
 
     // Precompute twiddle tables in threadgroup memory (size N/2)
     threadgroup float Twr[MAX_TW];
@@ -280,24 +277,13 @@ _FFTCONV_SOURCE = r"""
     for (uint i = tid; i < N; i += tpg) {
         float ur = Ur[f_base + i], ui = Ui[f_base + i];
         float kr = Kr[f_base + i], ki = Ki[f_base + i];
-        if (!dd_mode) {
-            float rr = fma(-ui, ki, ur * kr);
-            float ri = fma(ur,  ki, ui * kr);
-            Ur[f_base + i] = rr; Ui[f_base + i] = ri;
-        } else if (dd_vec) {
-            float2 ar = float2(ur, 0.0f), ai = float2(ui, 0.0f);
-            float2 br = float2(kr, 0.0f), bi = float2(ki, 0.0f);
-            thread float2 rr; thread float2 ri;
-            cdd2_mul(ar, ai, br, bi, rr, ri);
-            Ur[f_base + i] = dd2_to_float(rr);
-            Ui[f_base + i] = dd2_to_float(ri);
-        } else {
-            cdd_t ua = cdd_t{ dd_t{ur, 0.0f}, dd_t{ui, 0.0f} };
-            cdd_t kb = cdd_t{ dd_t{kr, 0.0f}, dd_t{ki, 0.0f} };
-            cdd_t rc = cdd_mul(ua, kb);
-            Ur[f_base + i] = dd_to_float(rc.re);
-            Ui[f_base + i] = dd_to_float(rc.im);
-        }
+        // Always use float2 double-double multiply for U*K
+        float2 ar = float2(ur, 0.0f), ai = float2(ui, 0.0f);
+        float2 br = float2(kr, 0.0f), bi = float2(ki, 0.0f);
+        thread float2 rr; thread float2 ri;
+        cdd2_mul(ar, ai, br, bi, rr, ri);
+        Ur[f_base + i] = dd2_to_float(rr);
+        Ui[f_base + i] = dd2_to_float(ri);
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);
 
@@ -322,7 +308,7 @@ def _get_fftconv_kernel():
     if _FFTCONV_KERNEL is None:
         _FFTCONV_KERNEL = mx.fast.metal_kernel(
             name="fftconv1d_unified",
-            input_names=["params", "u", "k_time", "D", "flags"],
+            input_names=["params", "u", "k_time", "D"],
             output_names=["y", "Ur", "Ui", "Kr", "Ki"],  # global workspaces
             header=_FFTCONV_HEADER,
             source=_FFTCONV_SOURCE,
@@ -337,14 +323,11 @@ class MetalFFTConv(nn.Module):
     Always uses our compiled kernel; no fallbacks. Kernels are compiled once globally.
     """
 
-    def __init__(self, match_torch: bool = False, dd_mode: bool = False, dd_vec: bool = True, hermitian_exact: bool = True, comp_bfly: bool = False):
+    def __init__(self, match_torch: bool = False):
         super().__init__()
         # If True, we may switch multiply path to pure f32 in future; kernel is already f32.
         self.match_torch = match_torch
-        self.dd_mode = dd_mode
-        self.dd_vec = dd_vec
-        self.hermitian_exact = hermitian_exact
-        self.comp_bfly = comp_bfly if dd_mode else False
+        # Precision-first path is always enabled in-kernel (no flags)
         self.kernel = _get_fftconv_kernel()
         # No host twiddle cache needed; computed per-launch in kernel
 
@@ -384,17 +367,8 @@ class MetalFFTConv(nn.Module):
         y_flat_shape = (y_elems,)
         work_shape = (n_elems,)
 
-        # Flags: bit0=dd_mode, bit2=dd_vec, bit3=hermitian_exact, bit4=comp_bfly
-        flags = mx.array(
-            int(self.dd_mode)
-            | (int(self.dd_vec) << 2)
-            | (int(self.hermitian_exact) << 3)
-            | (int(self.comp_bfly) << 4),
-            dtype=mx.uint32,
-        )
-
         (y_flat, _ur, _ui, _kr, _ki) = self.kernel(
-            inputs=[params, u_flat, k_flat, D_plane.reshape(-1), flags.reshape(-1)],
+            inputs=[params, u_flat, k_flat, D_plane.reshape(-1)],
             output_shapes=[y_flat_shape, work_shape, work_shape, work_shape, work_shape],
             output_dtypes=[mx.float32, mx.float32, mx.float32, mx.float32, mx.float32],
             grid=grid,

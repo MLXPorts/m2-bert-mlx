@@ -21,12 +21,6 @@ def compare_one(L=1024, B=2, C=8, match_torch=False):
     k64 = np.array(k, dtype=np.float64)
     y64 = np.fft.irfft(np.fft.rfft(u64, n=N, axis=-1) * np.fft.rfft(k64, n=N, axis=-1)[None, :, :], n=N, axis=-1)[..., :L]
 
-    # MLX
-    k_f = mx.fft.rfft(k, n=N, axis=-1)
-    u_f = mx.fft.rfft(u, n=N, axis=-1)
-    y_mlx = mx.fft.irfft(u_f * k_f.reshape(1, C, -1), n=N, axis=-1)[..., :L]
-    mx.eval(y_mlx)
-
     # Torch
     u_t = torch.from_numpy(np.array(u))
     k_t = torch.from_numpy(np.array(k))
@@ -39,23 +33,22 @@ def compare_one(L=1024, B=2, C=8, match_torch=False):
     def stats(a):
         return float(np.max(np.abs(a))), float(np.mean(np.abs(a)))
 
-    e_mlx = stats(np.array(y_mlx, dtype=np.float64) - y64)
     e_tch = stats(y_t.numpy().astype(np.float64) - y64)
     e_jit = stats(np.array(y_jit, dtype=np.float64) - y64)
 
-    return e_mlx, e_tch, e_jit
+    return e_tch, e_jit
 
 
 def main():
     sizes = [256, 512, 1024, 2048, 4096]
-    print("match_torch=False (extended DD multiply)")
+    print("match_torch=False (extended precision path)")
     for L in sizes:
-        e_mlx, e_tch, e_jit = compare_one(L=L, match_torch=False)
-        print(f"L={L:<5} | MLX max {e_mlx[0]:.3e} mean {e_mlx[1]:.3e} | Torch max {e_tch[0]:.3e} mean {e_tch[1]:.3e} | JIT-DD max {e_jit[0]:.3e} mean {e_jit[1]:.3e}")
-    print("\nmatch_torch=True (pure f32 multiply)")
+        e_tch, e_jit = compare_one(L=L, match_torch=False)
+        print(f"L={L:<5} | Torch max {e_tch[0]:.3e} mean {e_tch[1]:.3e} | JIT max {e_jit[0]:.3e} mean {e_jit[1]:.3e}")
+    print("\nmatch_torch=True (parity mode)")
     for L in sizes:
-        e_mlx, e_tch, e_jit = compare_one(L=L, match_torch=True)
-        print(f"L={L:<5} | MLX max {e_mlx[0]:.3e} mean {e_mlx[1]:.3e} | Torch max {e_tch[0]:.3e} mean {e_tch[1]:.3e} | JIT-f32 max {e_jit[0]:.3e} mean {e_jit[1]:.3e}")
+        e_tch, e_jit = compare_one(L=L, match_torch=True)
+        print(f"L={L:<5} | Torch max {e_tch[0]:.3e} mean {e_tch[1]:.3e} | JIT max {e_jit[0]:.3e} mean {e_jit[1]:.3e}")
 
 if __name__ == '__main__':
     main()

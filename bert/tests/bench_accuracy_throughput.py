@@ -29,19 +29,7 @@ def run_case(L=1024, B=2, C=8, iters=5):
     # baseline
     y64 = float64_baseline(u, k, L)
 
-    # MLX accuracy + throughput
-    t = 0.0
-    for i in range(iters+1):
-        t0 = time.perf_counter()
-        k_f = mx.fft.rfft(k, n=N, axis=-1)
-        u_f = mx.fft.rfft(u, n=N, axis=-1)
-        y_mlx = mx.fft.irfft(u_f * k_f.reshape(1, C, -1), n=N, axis=-1)[..., :L]
-        y_mlx = y_mlx + u*D
-        mx.eval(y_mlx)
-        if i>0:
-            t += time.perf_counter() - t0
-    mlx_ms = 1000.0*t/iters
-    e_mlx = stats(np.array(y_mlx, dtype=np.float64) - y64)
+    # Removed MLX native FFT path per kernel-only policy
 
     # Torch accuracy (CPU) — throughput not measured here
     u_t = torch.from_numpy(np.array(u))
@@ -50,7 +38,7 @@ def run_case(L=1024, B=2, C=8, iters=5):
     e_tch = stats(y_t.numpy().astype(np.float64) - y64)
 
     # JIT f32
-    conv_f32 = MetalFFTConv(use_metal_kernel=True, match_torch=True)
+    conv_f32 = MetalFFTConv(match_torch=True)
     t = 0.0
     for i in range(iters+1):
         t0 = time.perf_counter()
@@ -61,7 +49,7 @@ def run_case(L=1024, B=2, C=8, iters=5):
     e_jit_f32 = stats(np.array(y_jit, dtype=np.float64) - y64)
 
     # JIT DD
-    conv_dd = MetalFFTConv(use_metal_kernel=True, match_torch=False)
+    conv_dd = MetalFFTConv(match_torch=False)
     t = 0.0
     for i in range(iters+1):
         t0 = time.perf_counter()
@@ -73,7 +61,6 @@ def run_case(L=1024, B=2, C=8, iters=5):
 
     return {
         'L': L, 'B': B, 'C': C,
-        'mlx_max': e_mlx[0], 'mlx_mean': e_mlx[1], 'mlx_ms': mlx_ms,
         'torch_max': e_tch[0], 'torch_mean': e_tch[1],
         'jit_f32_max': e_jit_f32[0], 'jit_f32_mean': e_jit_f32[1], 'jit_f32_ms': jit_f32_ms,
         'jit_dd_max': e_jit_dd[0], 'jit_dd_mean': e_jit_dd[1], 'jit_dd_ms': jit_dd_ms,
@@ -83,7 +70,6 @@ def main():
     sizes = [256, 512, 1024, 2048, 4096]
     writer = csv.DictWriter(sys.stdout, fieldnames=[
         'L','B','C',
-        'mlx_max','mlx_mean','mlx_ms',
         'torch_max','torch_mean',
         'jit_f32_max','jit_f32_mean','jit_f32_ms',
         'jit_dd_max','jit_dd_mean','jit_dd_ms'
@@ -95,4 +81,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
