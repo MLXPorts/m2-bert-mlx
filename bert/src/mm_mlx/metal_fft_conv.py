@@ -236,7 +236,7 @@ _FFTCONV_SOURCE = r"""
     uint halfN = N >> 1;
     for (uint i = tid; i < halfN && i < MAX_TW; i += tpg) {
         float ang = -2.0f * PI_F * (float(i) / float(N));
-        float cw; float sw = sincos(ang, cw);
+        float cw; float sw = precise::sincos(ang, cw);
         Twr[i] = cw; Twi[i] = sw;
     }
     threadgroup_barrier(mem_flags::mem_threadgroup);

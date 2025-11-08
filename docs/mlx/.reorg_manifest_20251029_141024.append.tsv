@@ -1,0 +1,6 @@
+mlx.core.async_eval.md	core/mlx.core.async_eval.md
+mlx.core.atleast_3d.md	core/mlx.core.atleast_3d.md
+mlx.core.bitwise_invert.md	core/mlx.core.bitwise_invert.md
+mlx.core.broadcast_arrays.md	core/mlx.core.broadcast_arrays.md
+mlx.core.set_cache_limit.md	core/mlx.core.set_cache_limit.md
+mlx.nn.RoPE.md	nn/mlx.nn.RoPE.md
