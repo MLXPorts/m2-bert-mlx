@@ -1,6 +1,6 @@
 #!/usr/bin/env python
 """
-Compare MLX builtin activations (mlx.nn.activations) vs our registry (bert/src/mm_mlx/activations_mlx.py).
+Compare MLX builtin activations (mlx.nn.activations) vs our registry (bert/src/mm_mlx/activations.py).
 Checks elementwise parity across a range of values for:
 - tanh, sigmoid, relu, silu
 - gelu exact (erf) vs gelu_tanh (approx)
@@ -21,7 +21,7 @@ def load(name, path):
     spec.loader.exec_module(mod)
     return mod
 
-act_mod = load('activations_mlx', os.path.join(SRC_DIR, 'mm_mlx', 'activations_mlx.py'))
+act_mod = load('activations_mlx', os.path.join(SRC_DIR, 'mm_mlx', 'activations.py'))
 
 import mlx.nn as nn
 

@@ -16,7 +16,7 @@ from typing import Callable, Dict, Optional
 
 import mlx.core as mx
 try:
-    from ..math_ops import sqrt_2_over_pi  # type: ignore
+    from bert.src.mlx_ops.math_ops import sqrt_2_over_pi  # type: ignore
 except Exception:
     sqrt_2_over_pi = None
 

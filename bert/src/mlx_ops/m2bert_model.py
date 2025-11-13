@@ -10,10 +10,10 @@ Full implementation of M2-BERT with:
 
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Optional, Tuple
+from typing import Optional
 
-from .monarch_mixer_mlx import MonarchMixerSequenceMixing
-from .monarch_mlp_mlx import MonarchGLUMLP
+from bert.src.mlx_ops.monarch_mixer import MonarchMixerSequenceMixing
+from bert.src.mlx_ops.monarch_mlp import MonarchGLUMLP
 
 
 class BertEmbeddings(nn.Module):
@@ -56,6 +56,10 @@ class BertEmbeddings(nn.Module):
         # LayerNorm and dropout
         self.LayerNorm = nn.LayerNorm(hidden_size, eps=layer_norm_eps)
         self.dropout = nn.Dropout(dropout)
+        
+        # Position IDs buffer (for compatibility with PyTorch checkpoints)
+        # This is just [0, 1, 2, ..., max_position_embeddings-1]
+        self.position_ids = mx.arange(max_position_embeddings).reshape(1, -1)
 
     def __call__(
         self,
@@ -137,6 +141,7 @@ class M2BERTLayer(nn.Module):
         layer_norm_eps: float = 1e-12,
         bidirectional: bool = True,
         hyena_filter_order: int = 128,
+        hyena_emb_dim: int = 3,
         residual_long_conv: bool = True,
         fft_chunk_size: int = None
     ):
@@ -151,6 +156,7 @@ class M2BERTLayer(nn.Module):
             dropout=dropout,
             bidirectional=bidirectional,
             hyena_filter_order=hyena_filter_order,
+            hyena_emb_dim=hyena_emb_dim,
             residual_long_conv=residual_long_conv,
             fft_chunk_size=fft_chunk_size
         )
@@ -234,6 +240,7 @@ class M2BERTModel(nn.Module):
         layer_norm_eps: float = 1e-12,
         bidirectional: bool = True,
         hyena_filter_order: int = 128,
+        hyena_emb_dim: int = 3,
         residual_long_conv: bool = True,
         fft_chunk_size: int = 128
     ):
@@ -276,6 +283,7 @@ class M2BERTModel(nn.Module):
                 layer_norm_eps=layer_norm_eps,
                 bidirectional=bidirectional,
                 hyena_filter_order=hyena_filter_order,
+                hyena_emb_dim=hyena_emb_dim,
                 residual_long_conv=residual_long_conv,
                 fft_chunk_size=fft_chunk_size
             )

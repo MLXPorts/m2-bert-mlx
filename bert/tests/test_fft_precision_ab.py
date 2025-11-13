@@ -7,10 +7,11 @@ import torch
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(repo_root, 'src'))
 
-from mm_mlx.metal_fft_conv import MetalFFTConv
+from bert.src.mlx_ops.kernels.metal_fft_conv import MetalFFTConv
 
 
-def run_case(L=1024, dd=False, dd_vec=False, seed=0):
+def run_case(L=1024, seed=0):
+    """Test current kernel (precision-first path with comp_bfly=True, hermitian_exact=True)"""
     mx.random.seed(seed)
     B, C = 2, 8
     u = mx.random.normal((B, C, L)).astype(mx.float32)
@@ -22,7 +23,8 @@ def run_case(L=1024, dd=False, dd_vec=False, seed=0):
     k_t = torch.from_numpy(np.array(k))
     y_ref = torch.fft.irfft(torch.fft.rfft(u_t, n=N, dim=-1) * torch.fft.rfft(k_t, n=N, dim=-1).unsqueeze(0), n=N, dim=-1)[..., :L]
 
-    conv = MetalFFTConv(dd_mode=dd, dd_vec=dd_vec)
+    # Current kernel always uses precision-first path (hermitian_exact=True, comp_bfly=True)
+    conv = MetalFFTConv()
     y = conv(u, k, D); mx.eval(y)
     diff = np.abs(y_ref.numpy() - np.array(y))
     return float(diff.max()), float(diff.mean())
@@ -30,11 +32,11 @@ def run_case(L=1024, dd=False, dd_vec=False, seed=0):
 
 def main():
     sizes = [1024, 2048, 4096]
+    print("Testing MetalFFTConv (precision-first: hermitian_exact=True, comp_bfly=True)")
+    print("-" * 60)
     for L in sizes:
-        for dd in [False, True]:
-            for ddv in ([False, True] if dd else [False]):
-                m, M = run_case(L=L, dd=dd, dd_vec=ddv)
-                print(f"L={L:<5} dd={int(dd)} dd_vec={int(ddv)} | max {m:.3e} mean {M:.3e}")
+        m, M = run_case(L=L)
+        print(f"L={L:<5} | max error: {m:.3e} | mean error: {M:.3e}")
 
 
 if __name__ == '__main__':

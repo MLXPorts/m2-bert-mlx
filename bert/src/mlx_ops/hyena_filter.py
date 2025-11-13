@@ -21,7 +21,7 @@ from .metal_fft_conv import MetalFFTConv
 # Robustly resolve HyperProfile loader whether imported as a package or by path
 def _resolve_get_profile():
     try:
-        from .hyperprofiles_mlx import get_profile  # type: ignore
+        from bert.src.mlx_ops.hyperprofiles_mlx import get_profile  # type: ignore
         return get_profile
     except Exception:
         pass

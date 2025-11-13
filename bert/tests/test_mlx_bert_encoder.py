@@ -1,5 +1,8 @@
 #!/usr/bin/env python
-import os, sys, importlib.util, types, numpy as np
+import importlib.util
+import numpy as np
+import os
+
 import mlx.core as mx
 
 THIS_DIR = os.path.dirname(__file__)
@@ -33,7 +36,7 @@ class Cfg:
         self.hyena_training_additions = False
         self.use_glu_mlp = True
 
-enc_mod = load('bert_layers_mlx', os.path.join(SRC_DIR, 'bert_layers_mlx.py'))
+enc_mod = load('bert_layers_mlx', os.path.join(SRC_DIR, 'bert_layers.py'))
 
 def main():
     cfg = Cfg()

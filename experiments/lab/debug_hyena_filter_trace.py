@@ -1,10 +1,13 @@
 #!/usr/bin/env python
-import os, sys, importlib.util, types
+import importlib.util
+import os
+import sys
+import types
+
+import mlx.core as mx
 import numpy as np
 import torch
 import torch.nn as tnn
-import mlx.core as mx
-import mlx.nn as mnn
 
 THIS_DIR = os.path.dirname(__file__)
 PKG_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..'))
@@ -23,7 +26,7 @@ sys.modules['src'] = types.ModuleType('src')
 sys.modules['src.utils'] = types.ModuleType('src.utils')
 sys.modules['src.utils.train'] = load('src.utils.train', train_path)
 
-mlx_hyena = load('mlx_hyena', os.path.join(SRC_DIR, 'mm_mlx', 'hyena_filter_mlx.py'))
+mlx_hyena = load('mlx_hyena', os.path.join(SRC_DIR, 'mm_mlx', 'hyena_filter.py'))
 torch_hyena_mod = load('torch_hyena', os.path.join(SRC_DIR, 'mm', 'hyena_utils.py'))
 
 HyenaMLX = mlx_hyena.HyenaFilter

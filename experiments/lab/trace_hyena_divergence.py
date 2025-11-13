@@ -28,7 +28,7 @@ sys.modules['src'] = types.ModuleType('src')
 sys.modules['src.utils'] = types.ModuleType('src.utils')
 sys.modules['src.utils.train'] = load('src.utils.train', train_path)
 
-mlx_hyena = load('mlx_hyena', os.path.join(SRC_DIR, 'mm_mlx', 'hyena_filter_mlx.py'))
+mlx_hyena = load('mlx_hyena', os.path.join(SRC_DIR, 'mm_mlx', 'hyena_filter.py'))
 torch_hyena_mod = load('torch_hyena', os.path.join(SRC_DIR, 'mm', 'hyena_utils.py'))
 
 HyenaMLX = mlx_hyena.HyenaFilter

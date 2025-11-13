@@ -20,7 +20,7 @@ Optional: Residual long conv (second Hyena path on input)
 import mlx.core as mx
 import mlx.nn as nn
 
-from .hyena_filter_mlx import HyenaFilter
+from bert.src.mlx_ops.hyena_filter import HyenaFilter
 from .metal_kernels import depthwise_conv_3tap
 
 
@@ -137,9 +137,9 @@ class MonarchMixerSequenceMixing(nn.Module):
         # Short convolution (depthwise)
         total_width = self.d_model * self.NUM_PROJECTIONS
 
-        # MLX doesn't have Conv1d with groups, so we implement depthwise manually
-        # For now, use a simple linear approximation
+        # Depthwise Conv1d with bias (like PyTorch nn.Conv1d with groups=channels)
         self.short_filter_weight = mx.random.normal((total_width, 3)) * mx.array(0.02, dtype=mx.float32)
+        self.short_filter_bias = mx.zeros((total_width,), dtype=mx.float32)
 
     def depthwise_conv1d(self, x, kernel_size=3, padding=2):
         """
@@ -155,9 +155,8 @@ class MonarchMixerSequenceMixing(nn.Module):
         """
         batch, channels, length = x.shape
 
-        # Use Metal kernel for 3-tap depthwise conv
-        # Kernel implements padding=1 (zero-padding) internally
-        result = depthwise_conv_3tap(x, self.short_filter_weight)
+        # Use Metal kernel for 3-tap depthwise conv with bias
+        result = depthwise_conv_3tap(x, self.short_filter_weight, self.short_filter_bias)
         return result
 
     def __call__(self, u, tracer=None, **kwargs):

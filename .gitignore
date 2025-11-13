@@ -161,3 +161,6 @@ cython_debug/
 
 **/**.DS_Store
 **.DS_Store
+/.model/m2bert_341m_mlx.npz
+/.model/model.pt
+/.model/model_mlx.npz

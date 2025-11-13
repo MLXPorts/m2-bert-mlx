@@ -11,52 +11,40 @@ from einops import rearrange
 import opt_einsum as oe
 contract = oe.contract
 
-# Strict typed scalar helpers and device selection
-def _t_f32(v, device):
-    return torch.tensor(v, dtype=torch.float32, device=device)
-
-def _select_device(preferred: str = "mps"):
-    if preferred == "mps" and torch.backends.mps.is_available():
-        return torch.device("mps")
-    if torch.cuda.is_available():
-        return torch.device("cuda")
-    return torch.device("cpu")
-
 from src.utils.train import OptimModule
 
 def fftconv_ref(u_variable, k, D_variable, dropout_mask, gelu=True, k_rev=None, flashfft=None):
     # u.shape:   B H L
     seqlen = u_variable.shape[-1]
-    device = u_variable.device
 
     if flashfft is not None:
         y = flashfft(u_variable.to(dtype=torch.bfloat16).contiguous(), k)
     else:
         fft_size = 2 * seqlen
-        k_f = torch.div(torch.fft.rfft(k, n=fft_size), _t_f32(fft_size, device))
+        k_f = torch.fft.rfft(k, n=fft_size) / fft_size
         if k_rev is not None:
-            k_rev_f = torch.div(torch.fft.rfft(k_rev, n=fft_size), _t_f32(fft_size, device))
-            k_f = torch.add(k_f, torch.conj(k_rev_f))
+            k_rev_f = torch.fft.rfft(k_rev, n=fft_size) / fft_size
+            k_f = k_f + k_rev_f.conj()
         u_f = torch.fft.rfft(u_variable.to(dtype=k.dtype), n=fft_size)
 
         if len(u_variable.shape) > 3:
             k_f = k_f.unsqueeze(1)
 
-        y = torch.fft.irfft(torch.mul(u_f, k_f), n=fft_size, norm="forward")[..., :seqlen]
+        y = torch.fft.irfft(u_f * k_f, n=fft_size, norm="forward")[..., :seqlen]
 
-    out = torch.add(y, torch.mul(u_variable, D_variable))
+    out = y + u_variable * D_variable
 
     if gelu:
         out = F.gelu(out)
     if dropout_mask is not None:
-        return torch.mul(out, rearrange(dropout_mask, "b H -> b H 1")).to(dtype=u_variable.dtype)
+        return (out * rearrange(dropout_mask, "b H -> b H 1")).to(dtype=u_variable.dtype)
     else:
         return out.to(dtype=u_variable.dtype)
 
 
 @torch.jit.script
 def mul_sum(q, y):
-    return torch.sum(torch.mul(q, y), dim=1)
+    return (q * y).sum(dim=1)
 
 
 class Sin(nn.Module):
@@ -72,7 +60,7 @@ class Sin(nn.Module):
         self.w_mod = w_mod
 
     def forward(self, x):
-        return torch.sin(torch.mul(self.w_mod, torch.mul(self.freq, x)))
+        return torch.sin(self.w_mod * self.freq * x)
 
 
 class PositionalEmbedding(OptimModule):
@@ -81,21 +69,20 @@ class PositionalEmbedding(OptimModule):
         super().__init__()
 
         self.seq_len = seq_len
-        device = kwargs.get('device', _select_device())
         # The time embedding fed to the filteres is normalized so that t_f = 1
-        t = torch.linspace(_t_f32(0.0, device), _t_f32(1.0, device), self.seq_len, device=device, dtype=torch.float32)[None, :, None]
+        t = torch.linspace(0, 1, self.seq_len)[None, :, None]  # 1, L, 1
 
         if emb_dim > 1:
             bands = (emb_dim - 1) // 2
         # To compute the right embeddings we use the "proper" linspace
-        t_rescaled = torch.linspace(_t_f32(0.0, device), _t_f32(seq_len - 1, device), seq_len, device=device, dtype=torch.float32)[None, :, None]
-        w = torch.div(torch.mul(torch.mul(_t_f32(2.0, device), _t_f32(math.pi, device)), t_rescaled), _t_f32(seq_len, device))
+        t_rescaled = torch.linspace(0, seq_len - 1, seq_len)[None, :, None]
+        w = 2 * math.pi * t_rescaled / seq_len  # 1, L, 1
 
-        f = torch.linspace(_t_f32(1e-4, device), _t_f32(bands - 1, device), bands, device=device, dtype=torch.float32)[None, None]
-        z = torch.exp(torch.mul(torch.complex(_t_f32(0.0, device), _t_f32(-1.0, device)), torch.mul(f, w)))
+        f = torch.linspace(1e-4, bands - 1, bands)[None, None]
+        z = torch.exp(-1j * f * w)
         z = torch.cat([t, z.real, z.imag], dim=-1)
-        self.register("z", z.to(device=device, dtype=torch.float32), lr=lr_pos_emb)
-        self.register("t", t.to(device=device, dtype=torch.float32), lr=0.0)
+        self.register("z", z, lr=lr_pos_emb)
+        self.register("t", t, lr=0.0)
 
     def forward(self, L):
         return self.z[:, :L], self.t[:, :L]
@@ -113,17 +100,15 @@ class ExponentialModulation(OptimModule):
         **kwargs,
     ):
         super().__init__()
-        device = kwargs.get('device', _select_device())
-        self.shift = _t_f32(shift, device)
-        max_decay = torch.div(torch.log(_t_f32(target, device)), _t_f32(fast_decay_pct, device))
-        min_decay = torch.div(torch.log(_t_f32(target, device)), _t_f32(slow_decay_pct, device))
-        lin = torch.linspace(_t_f32(0.0, device), _t_f32(1.0, device), d_model, device=device, dtype=torch.float32)
-        deltas = torch.add(min_decay, torch.mul(torch.sub(max_decay, min_decay), lin))[None, None]
+        self.shift = shift
+        max_decay = math.log(target) / fast_decay_pct
+        min_decay = math.log(target) / slow_decay_pct
+        deltas = torch.linspace(min_decay, max_decay, d_model)[None, None]
         self.register("deltas", deltas, lr=modulation_lr)
 
     def forward(self, t, x):
-        decay = torch.exp(torch.mul(_t_f32(-1.0, t.device), torch.mul(t, self.deltas.abs())))
-        x = torch.mul(x, torch.add(decay, self.shift))
+        decay = torch.exp(-t * self.deltas.abs())
+        x = x * (decay + self.shift)
         return x
 
 

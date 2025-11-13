@@ -67,19 +67,23 @@ _DEPTHWISE_SOURCE = r"""
     float acc = v0 * k0;
     acc = fma(v1, k1, acc);
     acc = fma(v2, k2, acc);
+    
+    // Add bias
+    acc += bias[c];
 
     // Write output
     y[tid] = acc;
 """
 
 
-def depthwise_conv_3tap(x, kernel):
+def depthwise_conv_3tap(x, kernel, bias):
     """
     Depthwise 3-tap convolution using Metal kernel
 
     Args:
         x: (batch, channels, length) - input signal
         kernel: (channels, 3) - per-channel 3-tap filters
+        bias: (channels,) - per-channel bias
 
     Returns:
         y: (batch, channels, length) - convolved output
@@ -91,12 +95,13 @@ def depthwise_conv_3tap(x, kernel):
     # Ensure float32
     x = x.astype(mx.float32)
     kernel = kernel.astype(mx.float32)
+    bias = bias.astype(mx.float32)
 
     # Compile kernel on first use
     if _DEPTHWISE_KERNEL is None:
         _DEPTHWISE_KERNEL = mx.fast.metal_kernel(
             name="depthwise3",
-            input_names=["params", "x", "k"],
+            input_names=["params", "x", "k", "bias"],
             output_names=["y"],
             header=_HEADER,
             source=_DEPTHWISE_SOURCE
@@ -118,7 +123,7 @@ def depthwise_conv_3tap(x, kernel):
 
     # Dispatch kernel
     (y,) = _DEPTHWISE_KERNEL(
-        inputs=[params, x, kernel],
+        inputs=[params, x, kernel, bias],
         output_shapes=[(batch, channels, length)],
         output_dtypes=[mx.float32],
         grid=grid,

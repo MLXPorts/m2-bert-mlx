@@ -8,12 +8,14 @@ Implements:
 - MLXBertLayer (Monarch mixer for sequence mixing + MLP)
 - MLXBertEncoder (stack of layers, optional position encodings add-back)
 
-Notes
-- This path targets the Monarch mixer configuration (sequence mixing = Hyena/Monarch).
-- ALiBi and FlashAttention are only relevant for attention path and are not included here.
-- Monarch MLP is not yet implemented; config.use_monarch_mlp will raise NotImplementedError.
+# Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
+# Copyright (c) 2018-2021, NVIDIA CORPORATION.  All rights reserved.
+# Copyright (c) 2022, Tri Dao.
+# Copyright (c) 2023, MosaicML.
+# Copyright (c) 2023, Dan Fu and Simran Arora.
+Porting to MLX:
+# Copyright (c) 2025, Sydney Renee / The Solace Project
 """
-
 from typing import Optional
 
 import mlx.core as mx
@@ -21,7 +23,7 @@ import mlx.nn as nn
 
 def _get_profile():
     try:
-        from .mm_mlx.hyperprofiles_mlx import get_profile as gp  # type: ignore
+        from bert.src.mlx_ops import get_profile as gp  # type: ignore
         return gp()
     except Exception:
         # Fallback when loaded as a loose module: try absolute import with local path
@@ -30,7 +32,7 @@ def _get_profile():
             pkg_root = os.path.dirname(__file__)
             if pkg_root not in sys.path:
                 sys.path.insert(0, pkg_root)
-            from mm_mlx.hyperprofiles_mlx import get_profile as gp2  # type: ignore
+            from bert.src.mlx_ops import get_profile as gp2  # type: ignore
             return gp2()
         except Exception:
             class _P:
@@ -121,14 +123,14 @@ class MLXBertMLP(nn.Module):
         super().__init__()
         # Activation via registry
         try:
-            from .mm_mlx.activations_mlx import get_activation
+            from bert.src.mlx_ops.activations import get_activation
         except Exception:
-            from mm_mlx.activations_mlx import get_activation
+            from bert.src.mlx_ops.activations import get_activation
         act_name = getattr(config, 'mlx_mlp_activation', 'gelu_tanh')
         self.act = get_activation(act_name)
 
         if getattr(config, 'use_monarch_mlp', False):
-            from .mm_mlx.blockdiag_linear_mlx import BlockdiagLinear as BDLinear
+            from bert.src.mlx_ops import BlockdiagLinear as BDLinear
             self.fc1 = BDLinear(
                 config.hidden_size,
                 config.intermediate_size,
@@ -159,14 +161,14 @@ class MLXBertGLUMLP(nn.Module):
         super().__init__()
         # Activation via registry
         try:
-            from .mm_mlx.activations_mlx import get_activation
+            from bert.src.mlx_ops.activations import get_activation
         except Exception:
-            from mm_mlx.activations_mlx import get_activation
+            from bert.src.mlx_ops.activations import get_activation
         act_name = getattr(config, 'mlx_mlp_activation', 'gelu_tanh')
         self.act = get_activation(act_name)
 
         if getattr(config, 'use_monarch_mlp', False):
-            from .mm_mlx.blockdiag_linear_mlx import BlockdiagLinear as BDLinear
+            from bert.src.mlx_ops import BlockdiagLinear as BDLinear
             self.fc_g = BDLinear(
                 config.hidden_size,
                 2 * config.intermediate_size,
