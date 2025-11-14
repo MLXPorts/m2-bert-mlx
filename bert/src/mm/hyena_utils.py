@@ -4,10 +4,10 @@
 import math
 
 import opt_einsum as oe
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-from einops import rearrange
+import mlx
+import mlx.nn as nn
+import mlx.core as mx
+from ..mlx_ops.einops import rearrange
 
 contract = oe.contract
 
@@ -18,31 +18,31 @@ def fftconv_ref(u_variable, k, D_variable, dropout_mask, gelu=True, k_rev=None, 
     seqlen = u_variable.shape[-1]
 
     if flashfft is not None:
-        y = flashfft(u_variable.to(dtype=torch.bfloat16).contiguous(), k)
+        y = flashfft(u_variable.to(dtype=mx.bfloat16).contiguous(), k)
     else:
         fft_size = 2 * seqlen
-        k_f = torch.fft.rfft(k, n=fft_size) / fft_size
+        k_f = mx.fft.rfft(k, n=fft_size) / fft_size
         if k_rev is not None:
-            k_rev_f = torch.fft.rfft(k_rev, n=fft_size) / fft_size
+            k_rev_f = mx.fft.rfft(k_rev, n=fft_size) / fft_size
             k_f = k_f + k_rev_f.conj()
-        u_f = torch.fft.rfft(u_variable.to(dtype=k.dtype), n=fft_size)
+        u_f = mx.fft.rfft(u_variable.to(dtype=k.dtype), n=fft_size)
 
         if len(u_variable.shape) > 3:
             k_f = k_f.unsqueeze(1)
 
-        y = torch.fft.irfft(u_f * k_f, n=fft_size, norm="forward")[..., :seqlen]
+        y = mx.fft.irfft(u_f * k_f, n=fft_size, norm="forward")[..., :seqlen]
 
     out = y + u_variable * D_variable
 
     if gelu:
-        out = F.gelu(out)
+        out = mx.gelu(out)
     if dropout_mask is not None:
         return (out * rearrange(dropout_mask, "b H -> b H 1")).to(dtype=u_variable.dtype)
     else:
         return out.to(dtype=u_variable.dtype)
 
 
-@torch.jit.script
+@mlx.core.compile
 def mul_sum(q, y):
     return (q * y).sum(dim=1)
 
@@ -60,7 +60,7 @@ class Sin(nn.Module):
         self.w_mod = w_mod
 
     def forward(self, x):
-        return torch.sin(self.w_mod * self.freq * x)
+        return mx.sin(self.w_mod * self.freq * x)
 
 
 class PositionalEmbedding(OptimModule):
@@ -70,17 +70,17 @@ class PositionalEmbedding(OptimModule):
 
         self.seq_len = seq_len
         # The time embedding fed to the filteres is normalized so that t_f = 1
-        t = torch.linspace(0, 1, self.seq_len)[None, :, None]  # 1, L, 1
+        t = mx.linspace(0, 1, self.seq_len)[None, :, None]  # 1, L, 1
 
         if emb_dim > 1:
             bands = (emb_dim - 1) // 2
         # To compute the right embeddings we use the "proper" linspace
-        t_rescaled = torch.linspace(0, seq_len - 1, seq_len)[None, :, None]
+        t_rescaled = mx.linspace(0, seq_len - 1, seq_len)[None, :, None]
         w = 2 * math.pi * t_rescaled / seq_len  # 1, L, 1
 
-        f = torch.linspace(1e-4, bands - 1, bands)[None, None]
-        z = torch.exp(-1j * f * w)
-        z = torch.cat([t, z.real, z.imag], dim=-1)
+        f = mx.linspace(1e-4, bands - 1, bands)[None, None]
+        z = mx.exp(-1j * f * w)
+        z = mx.concat([t, z.real, z.imag], dim=-1)
         self.register("z", z, lr=lr_pos_emb)
         self.register("t", t, lr=0.0)
 
@@ -103,11 +103,11 @@ class ExponentialModulation(OptimModule):
         self.shift = shift
         max_decay = math.log(target) / fast_decay_pct
         min_decay = math.log(target) / slow_decay_pct
-        deltas = torch.linspace(min_decay, max_decay, d_model)[None, None]
+        deltas = mx.linspace(min_decay, max_decay, d_model)[None, None]
         self.register("deltas", deltas, lr=modulation_lr)
 
     def forward(self, t, x):
-        decay = torch.exp(-t * self.deltas.abs())
+        decay = mx.exp(-t * self.deltas.abs())
         x = x * (decay + self.shift)
         return x
 
@@ -154,7 +154,7 @@ class HyenaFilter(OptimModule):
         self.use_bias = bias
         self.bidirectional = bidirectional
 
-        self.bias = nn.Parameter(torch.randn(self.d_model))
+        self.bias = nn.Parameter(mx.random.normal((self.d_model))
         self.dropout = nn.Dropout(dropout)
 
         act = Sin(dim=order, w=w, w_mod=w_mod)

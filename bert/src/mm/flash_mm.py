@@ -3,9 +3,9 @@
 import math
 
 import opt_einsum as oe
-import torch
-import torch.nn as nn
-from einops import rearrange
+import mlx.core as mx
+import mlx.nn as nn
+from src.mlx_ops.einops import rearrange
 
 contract = oe.contract
 from flashmm import mm_block_fwd, hyena_filter_fwd, exp_mod_in_place_fwd
@@ -43,17 +43,17 @@ def fast_mm_block(
     return out_linear(out)
 
 def pos_emb_init(seq_len, emb_dim):
-    t = torch.linspace(0, 1, seq_len)[None, :, None]  # 1, L, 1
+    t = mx.linspace(0, 1, seq_len)[None, :, None]  # 1, L, 1
 
     if emb_dim > 1:
         bands = (emb_dim - 1) // 2
     # To compute the right embeddings we use the "proper" linspace
-    t_rescaled = torch.linspace(0, seq_len - 1, seq_len)[None, :, None]
+    t_rescaled = mx.linspace(0, seq_len - 1, seq_len)[None, :, None]
     w = 2 * math.pi * t_rescaled / seq_len  # 1, L, 1
 
-    f = torch.linspace(1e-4, bands - 1, bands)[None, None]
-    z = torch.exp(-1j * f * w)
-    z = torch.cat([t, z.real, z.imag], dim=-1)
+    f = mx.linspace(1e-4, bands - 1, bands)[None, None]
+    z = mx.exp(-1j * f * w)
+    z = mx.concat([t, z.real, z.imag], dim=-1)
     return z
 
 class FastFilter(OptimModule):
@@ -80,31 +80,31 @@ class FastFilter(OptimModule):
 
         z = pos_emb_init(seq_len, emb_dim).repeat(self.channels, 1, 1)
 
-        sin_freq = w * torch.ones(self.channels, order)
+        sin_freq = w * mx.ones(self.channels, order)
 
         # create parameters for eo_mat, eo_bias
         eo_linears = [
             nn.Linear(emb_dim, order)
             for _ in range(self.channels)
         ]
-        eo_mat = torch.stack([l.weight for l in eo_linears], dim=0).transpose(-1, -2).contiguous()
-        eo_bias = torch.stack([l.bias for l in eo_linears], dim=0)
+        eo_mat = mx.stack([l.weight for l in eo_linears], dim=0).transpose(-1, -2).contiguous()
+        eo_bias = mx.stack([l.bias for l in eo_linears], dim=0)
 
         # create parameters for oo1_mat, oo1_bias
         oo1_linears = [
             nn.Linear(order, order)
             for _ in range(self.channels)
         ]
-        oo1_mat = torch.stack([l.weight for l in oo1_linears], dim=0).transpose(-1, -2).contiguous()
-        oo1_bias = torch.stack([l.bias for l in oo1_linears], dim=0)
+        oo1_mat = mx.stack([l.weight for l in oo1_linears], dim=0).transpose(-1, -2).contiguous()
+        oo1_bias = mx.stack([l.bias for l in oo1_linears], dim=0)
 
         # create parameters for oo2_mat, oo2_bias
         oo2_linears = [
             nn.Linear(order, order)
             for _ in range(self.channels)
         ]
-        oo2_mat = torch.stack([l.weight for l in oo2_linears], dim=0).transpose(-1, -2).contiguous()
-        oo2_bias = torch.stack([l.bias for l in oo2_linears], dim=0)
+        oo2_mat = mx.stack([l.weight for l in oo2_linears], dim=0).transpose(-1, -2).contiguous()
+        oo2_bias = mx.stack([l.bias for l in oo2_linears], dim=0)
 
         # create parameters for oh_mat
         oh_linears = [
@@ -145,7 +145,7 @@ class FastFilter(OptimModule):
             self.oo1_mat, self.oo1_bias, self.oo2_mat, self.oo2_bias,
             self.reverse, None
         )
-        k = torch.bmm(k, self.oh_mat)
+        k = mx.bmm(k, self.oh_mat)
         k = exp_mod_in_place_fwd(k, self.reverse, self.min_decay, self.max_decay, self.shift)
         return k
 

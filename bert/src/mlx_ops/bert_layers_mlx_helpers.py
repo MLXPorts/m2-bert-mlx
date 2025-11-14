@@ -22,7 +22,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 
-from .hyperprofiles_mlx import get_profile as _get_profile
+from .hyperprofiles import get_profile as _get_profile
 
 from .monarch_mixer import MonarchMixerSequenceMixing
 

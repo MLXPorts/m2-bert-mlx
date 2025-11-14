@@ -11,13 +11,13 @@ import torch
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(repo_root, 'src'))
 
-from mm_mlx.metal_fft_conv import MetalFFTConv
+from bert.src.mlx_ops.kernels.metal_fft_conv import MetalFFTConv
 
 def float64_baseline(u, k, L):
     N = 2*L
-    u64 = np.array(u, dtype=np.float64)
-    k64 = np.array(k, dtype=np.float64)
-    y64 = np.fft.irfft(np.fft.rfft(u64, n=N, axis=-1) * np.fft.rfft(k64, n=N, axis=-1)[None, :, :], n=N, axis=-1)[..., :L]
+    u64 = mx.array(u, dtype=mx.float64)
+    k64 = mx.array(k, dtype=mx.float64)
+    y64 = mx.fft.irfft(mx.fft.rfft(u64, n=N, axis=-1) * np.fft.rfft(k64, n=N, axis=-1)[None, :, :], n=N, axis=-1)[..., :L]
     return y64
 
 def stats(a):

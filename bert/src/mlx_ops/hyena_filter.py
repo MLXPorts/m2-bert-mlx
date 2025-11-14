@@ -17,7 +17,7 @@ from .math_ops import PI, sqrt_2_over_pi
 
 from .kernels.metal_fft_conv import MetalFFTConv
 from .kernels.metal_fft_conv_streamed import MetalFFTConvStreamed
-from .hyperprofiles_mlx import get_profile
+from .hyperprofiles import get_profile
 
 
 class Sin(nn.Module):

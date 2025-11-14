@@ -46,13 +46,13 @@ It is slightly slower when headdim=128 and batch * nheads is large.
 - Triton version doesn't yet support different sequence lengths in a batch (i.e., RaggedTensor/NestedTensor).
 """
 
-import math
 
-import torch
-import triton  # type: ignore (reportMissingImports)
-import triton.language as tl  # type: ignore (reportMissingImports)
-from einops import repeat
+import mlx.core as mx
+#import triton  # type: ignore (reportMissingImports)
+#import triton.language as tl  # type: ignore (reportMissingImports)
+from .mlx_ops.einops import repeat
 
+# TODO PORT TO MLX + Metal JIT
 
 @triton.autotune(
     configs=[

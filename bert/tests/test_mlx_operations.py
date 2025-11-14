@@ -16,7 +16,7 @@ import sys
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import mlx.core as mx
-from mlx_ops.einops_mlx import rearrange, repeat, reduce
+from mlx_ops.einops import rearrange, repeat, reduce
 from mlx_ops.conv_ops import conv1d, depthwise_conv1d
 from mlx_ops.weight_loading import load_checkpoint
 
