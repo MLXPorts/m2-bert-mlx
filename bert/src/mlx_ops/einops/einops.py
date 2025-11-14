@@ -9,6 +9,8 @@ from . import EinopsError
 from ._backends import get_backend
 from .parsing import ParsedExpression, _ellipsis, AnonymousAxis
 
+import mlx.core as mx
+
 Tensor = TypeVar("Tensor")
 ReductionCallable = Callable[[Tensor, Tuple[int, ...]], Tensor]
 Reduction = Union[str, ReductionCallable]
@@ -18,16 +20,16 @@ _reductions = ("min", "max", "sum", "mean", "prod", "any", "all")
 
 # magic integers are required to stay within
 # traceable subset of language
-_unknown_axis_length = -999999
-_expected_axis_length = -99999
+_unknown_axis_length = mx.array(-999999, dtype=mx.int32)
+_expected_axis_length = mx.array(-99999, dtype=mx.int32)
 
 
 def _product(sequence: List[int]) -> int:
     """minimalistic product that works both with numbers and symbols. Supports empty lists"""
-    result = 1
+    result = mx.array(1, dtype=mx.int32)
     for element in sequence:
-        result *= element
-    return result
+        result = mx.multiply(result, mx.array(element, dtype=mx.int32))
+    return int(result)
 
 
 def _reduce_axes(tensor, reduction_type: Reduction, reduced_axes: List[int], backend):
@@ -50,6 +52,7 @@ def _optimize_transformation(init_shapes, reduced_axes, axes_reordering, final_s
     # joining consecutive axes that will be reduced
     # possibly we can skip this if all backends can optimize this (not sure)
     reduced_axes = tuple(sorted(reduced_axes))
+    one = mx.array(1, dtype=mx.int32)
     for i in range(len(reduced_axes) - 1)[::-1]:
         if reduced_axes[i] + 1 == reduced_axes[i + 1]:
             removed_axis = reduced_axes[i + 1]

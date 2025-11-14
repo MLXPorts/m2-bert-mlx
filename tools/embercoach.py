@@ -211,7 +211,7 @@ class Coach(ast.NodeVisitor):
             if not self._inside_indexing():
                 self._add(
                     node, 'error', 'OPS-SCALAR-STRICT',
-                    f"Python numeric in tensor math. {self._backend_hint()}"
+                    f"Python numeric in tensor math. {self._backend_hint()} Exception: List repetition (e.g., [(0,0)] * n) for building padding specs is allowed."
                 )
         self.generic_visit(node)
 

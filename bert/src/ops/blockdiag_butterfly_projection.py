@@ -2,8 +2,8 @@ import math
 
 import torch
 import torch.nn as nn
-from einops import rearrange
-from src.models.layers.blockdiag_butterfly_multiply import blockdiag_butterfly_multiply
+from ..mlx_ops.einops import rearrange
+from .models.layers.blockdiag_butterfly_multiply import blockdiag_butterfly_multiply
 
 
 # from src.ops.low_rank import low_rank_project

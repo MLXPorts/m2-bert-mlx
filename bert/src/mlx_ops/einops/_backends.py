@@ -10,8 +10,6 @@ Backends in `einops` are organized to meet the following requirements
 - if backend can't provide symbols for shape dimensions, UnknownSize objects are used
 """
 
-import sys
-
 __author__ = "Alex Rogozhnikov"
 
 _loaded_backends: dict = {}

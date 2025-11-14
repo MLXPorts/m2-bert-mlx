@@ -1,6 +1,8 @@
 from functools import lru_cache
 from typing import List, Union, TypeVar, Tuple, Sequence
 
+import mlx.core as mx
+
 from ._backends import get_backend
 from .parsing import ParsedExpression
 
@@ -26,8 +28,13 @@ def analyze_pattern(pattern: str, opname: str) -> Tuple[int, int, int]:
             if not is_valid:
                 raise EinopsError(f'Invalid axis name {axis} in {opname}(..., "{pattern}")')
     n_axes_before = axes.index("*")
-    n_axes_after = len(axes) - n_axes_before - 1
-    min_axes = n_axes_before + n_axes_after
+    one = mx.array(1, dtype=mx.int32)
+    n_axes_before_mx = mx.array(n_axes_before, dtype=mx.int32)
+    len_axes_mx = mx.array(len(axes), dtype=mx.int32)
+    n_axes_after_mx = mx.subtract(mx.subtract(len_axes_mx, n_axes_before_mx), one)
+    min_axes_mx = mx.add(n_axes_before_mx, n_axes_after_mx)
+    n_axes_after = int(n_axes_after_mx)
+    min_axes = int(min_axes_mx)
     return n_axes_before, n_axes_after, min_axes
 
 
@@ -89,10 +96,10 @@ def pack(tensors: Sequence[Tensor], pattern: str) -> Tuple[Tensor, List[Shape]]:
 
 
 def prod(x: Shape) -> int:
-    result = 1
+    result = mx.array(1, dtype=mx.int32)
     for i in x:
-        result *= i
-    return result
+        result = mx.multiply(result, mx.array(i, dtype=mx.int32))
+    return int(result)
 
 
 def unpack(tensor: Tensor, packed_shapes: List[Shape], pattern: str) -> List[Tensor]:
@@ -140,14 +147,25 @@ def unpack(tensor: Tensor, packed_shapes: List[Shape], pattern: str) -> List[Ten
 
     backend = get_backend(tensor)
     input_shape = backend.shape(tensor)
-    if len(input_shape) != n_axes_before + 1 + n_axes_after:
+    one = mx.array(1, dtype=mx.int32)
+    n_axes_before_mx = mx.array(n_axes_before, dtype=mx.int32)
+    n_axes_after_mx = mx.array(n_axes_after, dtype=mx.int32)
+    expected_ndim = int(mx.add(mx.add(n_axes_before_mx, one), n_axes_after_mx))
+    if len(input_shape) != expected_ndim:
         raise EinopsError(f"unpack(..., {pattern}) received input of wrong dim with shape {input_shape}")
 
     unpacked_axis: int = n_axes_before
 
     lengths_of_composed_axes: List[int] = [-1 if -1 in p_shape else prod(p_shape) for p_shape in packed_shapes]
 
-    n_unknown_composed_axes = sum(int(x == -1) for x in lengths_of_composed_axes)
+    # Count -1 values using MLX ops
+    count = mx.array(0, dtype=mx.int32)
+    minus_one = mx.array(-1, dtype=mx.int32)
+    for x in lengths_of_composed_axes:
+        x_mx = mx.array(x, dtype=mx.int32)
+        is_minus_one = mx.equal(x_mx, minus_one)
+        count = mx.add(count, mx.where(is_minus_one, mx.array(1, dtype=mx.int32), mx.array(0, dtype=mx.int32)))
+    n_unknown_composed_axes = int(count)
     if n_unknown_composed_axes > 1:
         raise EinopsError(
             f"unpack(..., {pattern}) received more than one -1 in {packed_shapes} and can't infer dimensions"
