@@ -24,7 +24,9 @@ from __future__ import annotations
 import mlx.core as mx
 import mlx.nn as nn
 
-from .typed import f32, u32
+# Type helpers for MLX arrays
+f32 = lambda x: mx.array(x, dtype=mx.float32)
+u32 = lambda x: mx.array(x, dtype=mx.uint32)
 # math_ops is alongside mm_mlx at bert/src; import absolute
 # No host math needed
 

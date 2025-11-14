@@ -20,8 +20,8 @@ Optional: Residual long conv (second Hyena path on input)
 import mlx.core as mx
 import mlx.nn as nn
 
-from bert.src.mlx_ops.hyena_filter import HyenaFilter
-from .metal_kernels import depthwise_conv_3tap
+from .hyena_filter import HyenaFilter
+from .kernels.metal_kernels import depthwise_conv_3tap
 
 
 class MonarchMixerSequenceMixing(nn.Module):
@@ -72,10 +72,10 @@ class MonarchMixerSequenceMixing(nn.Module):
         self.d_model = d_model
         self.l_max = l_max
         self.kernel_lr = hyena_kernel_lr
-        self.channels = 1
+        self.channels = 1  # Initialization constant
         self.bidirectional = bidirectional
         self.residual_long_conv = residual_long_conv
-        self.NUM_PROJECTIONS = 3
+        self.NUM_PROJECTIONS = 3  # Initialization constant
 
         print('-- Bidirectional:', self.bidirectional)
         print("-- Using Long Conv Residual:", self.residual_long_conv)
@@ -122,7 +122,9 @@ class MonarchMixerSequenceMixing(nn.Module):
             )
 
         # Input projection: d_model → 3 * d_model
-        self.in_linear = nn.Linear(d_model, 3 * d_model)
+        # Initialization-time dimension calculation (not in compute graph)
+        out_proj_dim = d_model * self.NUM_PROJECTIONS
+        self.in_linear = nn.Linear(d_model, out_proj_dim)
 
         # Output projection
         self.out_linear = nn.Linear(d_model, d_model)
@@ -206,7 +208,7 @@ class MonarchMixerSequenceMixing(nn.Module):
         v = uc[:, 2 * self.d_model:, :]  # (batch, d_model, L)
 
         # Input gate: v = v * x1
-        v = v * x1
+        v = mx.multiply(v, x1)
         if tracer is not None:
             try:
                 tracer.log('monarch.gated_v', v, framework='mlx')
@@ -259,7 +261,7 @@ class MonarchMixerSequenceMixing(nn.Module):
             yu = None
 
         # Post-gate: y = y * x2
-        y = y * x2
+        y = mx.multiply(y, x2)
         if tracer is not None:
             try:
                 tracer.log('monarch.post_gate', y, framework='mlx')
@@ -268,7 +270,7 @@ class MonarchMixerSequenceMixing(nn.Module):
 
         # Add residual path
         if self.residual_long_conv and yu is not None:
-            y = y + yu
+            y = mx.add(y, yu)
 
         # Transpose back: (batch, d_model, L) → (batch, L, d_model)
         y = y.transpose(0, 2, 1)
@@ -289,6 +291,7 @@ class MonarchMixerSequenceMixing(nn.Module):
 
 
 def _demo():
+    # Demo configuration (initialization-time constants)
     batch_size = 2
     seq_len = 64
     d_model = 768

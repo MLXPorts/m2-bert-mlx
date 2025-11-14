@@ -12,45 +12,25 @@ Full port of hyena_utils.py with all features:
 """
 
 import os
+import math
 import importlib.util
 import mlx.core as mx
 import mlx.nn as nn
-from math_ops import PI, sqrt_2_over_pi
-from .metal_fft_conv import MetalFFTConv
 
-# Robustly resolve HyperProfile loader whether imported as a package or by path
-def _resolve_get_profile():
-    try:
-        from bert.src.mlx_ops.hyperprofiles_mlx import get_profile  # type: ignore
-        return get_profile
-    except Exception:
-        pass
-    try:
-        from mm_mlx.hyperprofiles_mlx import get_profile  # type: ignore
-        return get_profile
-    except Exception:
-        pass
-    # Load by file path relative to this file
-    try:
-        here = os.path.dirname(os.path.abspath(__file__))
-        hp_path = os.path.join(here, 'hyperprofiles_mlx.py')
-        spec = importlib.util.spec_from_file_location('mlx_hp_local', hp_path)
-        if spec and spec.loader:
-            mod = importlib.util.module_from_spec(spec)
-            spec.loader.exec_module(mod)  # type: ignore[attr-defined]
-            return getattr(mod, 'get_profile')
-    except Exception:
-        pass
-    # Final fallback: sane defaults
-    def _fallback():
-        class _P:
-            gelu_mode = "erf"
-            fft_norm = "forward"
-            bidir_combine = "sum"  # default to Torch-like
-        return _P()
-    return _fallback
+# Mathematical constants as MLX arrays
+PI = mx.array(math.pi, dtype=mx.float32)
+sqrt_2_over_pi = mx.array(math.sqrt(2.0 / math.pi), dtype=mx.float32)
 
-get_profile = _resolve_get_profile()
+from .kernels.metal_fft_conv import MetalFFTConv
+from .kernels.metal_fft_conv_streamed import MetalFFTConvStreamed
+
+# HyperProfile not needed for basic inference - use sane defaults
+class _DefaultProfile:
+    gelu_mode = "erf"
+    fft_norm = "forward"
+    bidir_combine = "sum"
+
+get_profile = lambda: _DefaultProfile()
 
 
 class Sin(nn.Module):
@@ -143,10 +123,10 @@ class ExponentialModulation(nn.Module):
     ):
         super().__init__()
         self.shift = mx.array(shift, dtype=mx.float32)
-        max_decay = mx.log(mx.array(target, dtype=mx.float32)) / mx.array(fast_decay_pct, dtype=mx.float32)
-        min_decay = mx.log(mx.array(target, dtype=mx.float32)) / mx.array(slow_decay_pct, dtype=mx.float32)
+        max_decay = mx.divide(mx.log(mx.array(target, dtype=mx.float32)), mx.array(fast_decay_pct, dtype=mx.float32))
+        min_decay = mx.divide(mx.log(mx.array(target, dtype=mx.float32)), mx.array(slow_decay_pct, dtype=mx.float32))
         lin = mx.linspace(0.0, 1.0, d_model).astype(mx.float32).reshape(1, 1, d_model)
-        deltas = min_decay + (max_decay - min_decay) * lin
+        deltas = mx.add(min_decay, mx.multiply(mx.subtract(max_decay, min_decay), lin))
         self.deltas = deltas
         self.modulation_lr = modulation_lr
 
@@ -156,18 +136,30 @@ class ExponentialModulation(nn.Module):
 
 
 def _hyena_fft_conv(u, k_time, D, seqlen, fft_chunk_size=None, gelu=False, dropout_mask=None, tracer=None, prefix: str = "hyena"):
-    """FFT-based 1D convolution using our JIT Metal kernel only (no native MLX FFT).
+    """FFT-based 1D convolution using JIT Metal kernels.
+
+    Automatically switches between:
+    - Unified kernel (fast, all-in-one) for L <= 2048
+    - Streamed kernel (4-phase pipeline) for L > 2048 (supports unlimited length)
 
     Args:
         u: (batch, d_model, seqlen)
         k_time: (d_model, seqlen)
         D: (1, d_model, 1)
+        seqlen: sequence length L
     """
-    # Single dispatch across all channels; kernel tiles internally.
-    if not hasattr(_hyena_fft_conv, "_conv"):
-        _hyena_fft_conv._conv = MetalFFTConv()
+    # Initialize both kernels on first use
+    if not hasattr(_hyena_fft_conv, "_conv_unified"):
+        _hyena_fft_conv._conv_unified = MetalFFTConv()
+        _hyena_fft_conv._conv_streamed = MetalFFTConvStreamed()
 
-    y = _hyena_fft_conv._conv(u, k_time, D)
+    # Automatic kernel selection based on sequence length
+    # Unified kernel: supports L up to 2048 (N=2*L=4096 fits in threadgroup memory)
+    # Streamed kernel: splits into 4 phases, supports arbitrary L
+    if seqlen <= 2048:
+        y = _hyena_fft_conv._conv_unified(u, k_time, D)
+    else:
+        y = _hyena_fft_conv._conv_streamed(u, k_time, D)
 
     if gelu:
         prof = get_profile()
@@ -281,7 +273,7 @@ class HyenaFilter(nn.Module):
             h = self.modulation(t, h)
         if self.normalized:
             h_norm = mx.sum(mx.abs(h), axis=-1, keepdims=True)
-            h = h / (h_norm + mx.array(1e-8, dtype=mx.float32))
+            h = mx.divide(h, mx.add(h_norm, mx.array(1e-8, dtype=mx.float32)))
         return h
 
     def filter_rev(self, L):
@@ -299,15 +291,16 @@ class HyenaFilter(nn.Module):
             h = self.modulation(t, h)
         if self.normalized:
             h_norm = mx.sum(mx.abs(h), axis=-1, keepdims=True)
-            h = h / (h_norm + mx.array(1e-8, dtype=mx.float32))
+            h = mx.divide(h, mx.add(h_norm, mx.array(1e-8, dtype=mx.float32)))
         return h
 
     def __call__(self, x, L, k_fwd=None, k_rev=None, bias=None, tracer=None):
         # Generate filters if not provided
         if k_fwd is None:
-            k_fwd = self.filter(L).transpose(0, 2, 1)[0]
+            axes = mx.array([0, 2, 1], dtype=mx.int32)
+            k_fwd = mx.transpose(self.filter(L), axes)[0]
             if self.bidirectional and k_rev is None:
-                k_rev = self.filter_rev(L).transpose(0, 2, 1)[0]
+                k_rev = mx.transpose(self.filter_rev(L), axes)[0]
 
         if isinstance(k_fwd, tuple):
             k_fwd = k_fwd[0]

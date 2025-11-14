@@ -13,7 +13,9 @@ Each phase gets its own compiled kernel. Orchestration uses MLX stream chaining.
 
 import mlx.core as mx
 import mlx.nn as nn
-from .typed import u32
+
+# Type helper for MLX arrays
+u32 = lambda x: mx.array(x, dtype=mx.uint32)
 
 # Global kernel cache - compile once, reuse forever
 _KERNELS = {}

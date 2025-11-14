@@ -164,3 +164,9 @@ cython_debug/
 /.model/m2bert_341m_mlx.npz
 /.model/model.pt
 /.model/model_mlx.npz
+/bert/.model/.locks/models--danfu09--m2-bert-80m/26118317dc370725e11de8a843157d4d7c8462b7373fdc9db048492bf1be5c4e.lock
+/bert/.model/models--danfu09--m2-bert-80m/blobs/26118317dc370725e11de8a843157d4d7c8462b7373fdc9db048492bf1be5c4e
+/bert/.model/models--danfu09--m2-bert-80m/refs/main
+/bert/.model/models--danfu09--m2-bert-80m/snapshots/9fbe15600092420add5457ddcc1cee24d84c00af/model.pt
+/bert/.model/m2-bert-80m_mlx.npz
+/bert/.model/m2-bert-80m_params.txt
