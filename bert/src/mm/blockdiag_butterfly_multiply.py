@@ -1,6 +1,19 @@
 #!/usr/bin/env python
-# Adapted from https://github.com/HazyResearch/fly/tree/master/src/models/layers
-# Converted to MLX
+"""
+Block-diagonal butterfly multiply (MLX reference implementation).
+
+The original MosaicML code relied on custom CUDA/Torch kernels for butterfly
+projections.  This MLX port preserves the public API (`blockdiag_butterfly_*`)
+so higher level code can stay unchanged, while the implementation is expressed
+entirely with MLX primitives:
+
+* The “reference” variant is intentionally literal (einsum + reshape) to aid
+  debugging and onboarding.
+* The fast path leverages batched MLX matmuls and einops reshapes to mimic the
+  CUDA kernel’s memory pattern.
+* Implementation 3 demonstrates how to build dense block-diagonal matrices via
+  MLX updates—useful for correctness tests or to instrument gradients.
+"""
 
 import mlx.core as mx
 from mlx_ops.einops import rearrange
