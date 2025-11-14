@@ -3,12 +3,12 @@
 
 import math
 
+import opt_einsum as oe
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-
 from einops import rearrange
-import opt_einsum as oe
+
 contract = oe.contract
 
 from src.utils.train import OptimModule

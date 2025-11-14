@@ -7,7 +7,6 @@ Currently uses a simplified pattern; in production you'd compile the full kernel
 """
 
 import mlx.core as mx
-from pathlib import Path
 
 
 class ActualCustomFFTKernel:

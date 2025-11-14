@@ -1,12 +1,11 @@
 # Adapted from https://github.com/HazyResearch/fly/tree/master/src/models/layers
 
 import math
+
 import numpy as np
-
 import torch
-from torch.nn import functional as F
-
 from einops import rearrange
+from torch.nn import functional as F
 
 
 def blockdiag_butterfly_multiply_reference(x, w1_bfly, w2_bfly, version=2):

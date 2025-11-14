@@ -3,8 +3,9 @@ Pure MLX implementation of common einops patterns used in M2-BERT.
 NO numpy, strict MLX operations only.
 """
 
+from typing import List
+
 import mlx.core as mx
-from typing import Dict, List, Tuple
 
 
 def rearrange(tensor: mx.array, pattern: str, **axes_lengths) -> mx.array:

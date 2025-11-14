@@ -6,13 +6,13 @@ Prints stats at each fine-grained stage and reports the first stage where
 abs/rel/ULP deltas exceed thresholds.
 """
 
+import importlib.util
 import os
 import sys
-import importlib.util
-import numpy as np
-import torch
 
 import mlx.core as mx
+import numpy as np
+import torch
 
 # Ensure MLX Hyena uses frequency-domain average combine to match Torch path
 os.environ.setdefault('MLX_M2_PROFILE', 'torch_like')

@@ -87,10 +87,7 @@ def get_profile() -> HyperProfile:
     global _current
     if _current is not None:
         return _current
-    # Lazy init from env or default
+    # Lazy init from env or default (must exist; no fallback)
     env_name = os.environ.get("MLX_M2_PROFILE", "mlx_stable")
-    try:
-        _current = load_profile(env_name)
-    except Exception:
-        _current = HyperProfile.from_dict(_DEFAULTS)
+    _current = load_profile(env_name)
     return _current

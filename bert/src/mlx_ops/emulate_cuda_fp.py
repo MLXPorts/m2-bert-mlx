@@ -13,7 +13,9 @@ behavior commonly observed in CUDA codegen.
 Note: This module is for diagnostics only. It should not be used in hot paths.
 """
 from __future__ import annotations
+
 from typing import Tuple
+
 import numpy as np
 
 

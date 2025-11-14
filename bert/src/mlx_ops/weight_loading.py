@@ -7,9 +7,10 @@ and convert them to MLX format.
 NO NumPy - strict MLX operations only.
 """
 
-import mlx.core as mx
-from typing import Dict, List, Tuple, Optional
 import os
+from typing import Dict, List, Tuple
+
+import mlx.core as mx
 
 
 def load_pytorch_checkpoint(checkpoint_path: str) -> Dict[str, mx.array]:

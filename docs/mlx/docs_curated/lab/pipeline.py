@@ -13,9 +13,10 @@ of channel bands through a complete FFT-based convolution pipeline:
 Each stream processes different channel bands in parallel.
 """
 
-import mlx.core as mx
 from pathlib import Path
 from typing import List, Tuple
+
+import mlx.core as mx
 
 
 class FFTConvPipeline:

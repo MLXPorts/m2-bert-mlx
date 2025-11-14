@@ -5,10 +5,11 @@ This script demonstrates how to load the pretrained M2-BERT-80M model
 and use it for masked language modeling.
 """
 
-import mlx.core as mx
-from pathlib import Path
-from typing import List, Dict
 import sys
+from pathlib import Path
+
+import mlx.core as mx
+
 sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from mlx_ops import load_checkpoint, print_checkpoint_info

@@ -8,9 +8,10 @@ This properly loads and uses the custom Metal FFT kernels, demonstrating:
 3. Proper MLX tensor discipline (no Python scalars!)
 """
 
-import mlx.core as mx
 from pathlib import Path
 from typing import List, Tuple
+
+import mlx.core as mx
 
 
 class CustomFFTKernels:

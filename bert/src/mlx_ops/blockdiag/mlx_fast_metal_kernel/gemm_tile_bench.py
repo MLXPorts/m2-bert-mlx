@@ -8,6 +8,7 @@ Includes variants discussed in WWDC-inspired notes (16x16 default; 32x8; 8x32; 1
 import time
 
 import mlx.core as mx
+
 from gemm_kernels import gemm_av, gemm_at_b, set_gemm_tiles
 
 

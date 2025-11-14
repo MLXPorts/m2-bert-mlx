@@ -11,8 +11,8 @@ import math
 import os
 import sys
 import warnings
-from typing import List, Optional, Tuple, Union
 from functools import partial
+from typing import List, Optional, Tuple, Union
 
 # FlashFFTConv not needed in MLX
 
@@ -25,11 +25,30 @@ import mlx.nn as nn
 from mlx_ops.einops_mlx import rearrange
 # consume_prefix_in_state_dict_if_present not needed
 from mlx_ops.activations import get_activation as ACT2FN
-from transformers.modeling_outputs import (MaskedLMOutput,
-                                           SequenceClassifierOutput)
-from transformers.models.bert.modeling_bert import BertPreTrainedModel
 
-import pdb
+# MLX-only: lightweight containers matching HF API names
+class BertPreTrainedModel(nn.Module):
+    def __init__(self, config):
+        super().__init__()
+        self.config = config
+
+    # Keep as no-op for compatibility
+    def post_init(self):
+        return None
+
+class MaskedLMOutput:
+    def __init__(self, loss=None, logits=None, hidden_states=None, attentions=None):
+        self.loss = loss
+        self.logits = logits
+        self.hidden_states = hidden_states
+        self.attentions = attentions
+
+class SequenceClassifierOutput:
+    def __init__(self, loss=None, logits=None, hidden_states=None, attentions=None):
+        self.loss = loss
+        self.logits = logits
+        self.hidden_states = hidden_states
+        self.attentions = attentions
 
 # Flash attention not needed in MLX - we use native MLX operations
 flash_attn_qkvpacked_func = None
@@ -1591,14 +1610,11 @@ class BertForSequenceClassification(BertPreTrainedModel):
             else:
                 if self.config.use_normalized_embeddings:
                     embedding = mx.normalize(pooled_output, p=2, axis=1)
-                    try:
-                        for row in range(embedding.shape[0]):
-                            assert mx.linalg.norm(embedding[row, :], p=2) >= 0.99 # Check that Euclidean distance is 1.0
-                            assert mx.linalg.norm(embedding[row, :], p=2) <= 1.01 # Weird floating point issue doesn't allow us to do strict equality
-                        assert embedding.shape[1] == 768
-                        return {"sentence_embedding": embedding}
-                    except:
-                        raise ValueError('Error with embedding normalization')
+                    for row in range(embedding.shape[0]):
+                        if not (mx.linalg.norm(embedding[row, :], p=2) >= 0.99 and mx.linalg.norm(embedding[row, :], p=2) <= 1.01):
+                            raise ValueError('Embedding normalization outside expected tolerance')
+                    assert embedding.shape[1] == 768
+                    return {"sentence_embedding": embedding}
                 else:
                     return {"sentence_embedding": pooled_output}
 
@@ -1652,4 +1668,3 @@ class BertForSequenceClassification(BertPreTrainedModel):
                 hidden_states=None,
                 attentions=None,
             )
-

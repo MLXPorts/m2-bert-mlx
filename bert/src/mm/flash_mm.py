@@ -1,10 +1,11 @@
 # Copyright (c) 2023, Dan Fu and Simran Arora.
 
+import math
+
+import opt_einsum as oe
 import torch
 import torch.nn as nn
-import math
 from einops import rearrange
-import opt_einsum as oe
 
 contract = oe.contract
 from flashmm import mm_block_fwd, hyena_filter_fwd, exp_mod_in_place_fwd

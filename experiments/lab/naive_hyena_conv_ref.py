@@ -7,13 +7,14 @@ adding bias D channel-wise, rounding to float32 at each multiply and add via str
 Used to decide whether MLX or Torch deviates more from a fixed-order FP32 reference.
 """
 
-import os
-import sys
-import struct
 import importlib.util
+import os
+import struct
+import sys
+
+import mlx.core as mx
 import numpy as np
 import torch
-import mlx.core as mx
 
 THIS_DIR = os.path.dirname(__file__)
 PKG_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..'))

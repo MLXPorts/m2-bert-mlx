@@ -21,42 +21,28 @@ _debug_importing = False
 
 def get_backend(tensor) -> "AbstractBackend":
     """
-    Takes a correct backend (e.g. numpy backend if tensor is numpy.ndarray) for a tensor.
-    If needed, imports package and creates backend
+    Always use the MLX backend. If MLX is not available, raise a clear error.
+
+    This project forbids NumPy and any non-MLX tensor backends, so we bypass
+    autodetection and return a singleton MLX backend instance.
     """
-    _type = type(tensor)
-    _result = _type2backend.get(_type, None)
-    if _result is not None:
-        return _result
+    try:
+        import mlx.core as mx  # noqa: F401
+    except Exception as e:
+        raise RuntimeError(
+            "MLX is required but not found. Please install 'mlx' to run einops operations."
+        ) from e
 
-    for framework_name, backend in list(_loaded_backends.items()):
-        if backend.is_appropriate_type(tensor):
-            _type2backend[_type] = backend
-            return backend
+    # Lazy import of our MLX backend wrapper
+    from .backend_mlx import MLXBackend
 
-    # Find backend subclasses recursively
-    backend_subclasses = []
-    backends = AbstractBackend.__subclasses__()
-    while backends:
-        backend = backends.pop()
-        backends += backend.__subclasses__()
-        backend_subclasses.append(backend)
+    if "mlx" not in _loaded_backends:
+        _loaded_backends["mlx"] = MLXBackend()
 
-    for BackendSubclass in backend_subclasses:
-        if _debug_importing:
-            print("Testing for subclass of ", BackendSubclass)
-        if BackendSubclass.framework_name not in _loaded_backends:
-            # check that module was already imported. Otherwise it can't be imported
-            if BackendSubclass.framework_name in sys.modules:
-                if _debug_importing:
-                    print("Imported backend for ", BackendSubclass.framework_name)
-                backend = BackendSubclass()
-                _loaded_backends[backend.framework_name] = backend
-                if backend.is_appropriate_type(tensor):
-                    _type2backend[_type] = backend
-                    return backend
-
-    raise RuntimeError("Tensor type unknown to einops {}".format(type(tensor)))
+    backend = _loaded_backends["mlx"]
+    # Cache mapping for any incoming type to speed up repeated calls
+    _type2backend[type(tensor)] = backend
+    return backend
 
 
 class AbstractBackend:

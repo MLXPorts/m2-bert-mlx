@@ -8,9 +8,10 @@ Full implementation of M2-BERT with:
 - Pooling layer for sentence embeddings
 """
 
+from typing import Optional
+
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Optional
 
 from bert.src.mlx_ops.monarch_mixer import MonarchMixerSequenceMixing
 from bert.src.mlx_ops.monarch_mlp import MonarchGLUMLP

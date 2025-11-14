@@ -5,10 +5,14 @@ Trace MLX vs Torch Hyena step-by-step and report where outputs diverge.
 Prints per-stage max_abs, MSE, and max ULP difference to pinpoint the smallest
 operation responsible for any discrepancy.
 """
-import os, sys, types, importlib.util
+import importlib.util
+import os
+import sys
+import types
+
+import mlx.core as mx
 import numpy as np
 import torch
-import mlx.core as mx
 import torch.nn as tnn
 
 THIS_DIR = os.path.dirname(__file__)

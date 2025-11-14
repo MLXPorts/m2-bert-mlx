@@ -10,8 +10,9 @@ Run from project root:
     python3 bert/tests/test_mlx_operations.py
 """
 
-import sys
 import os
+import sys
+
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 import mlx.core as mx

@@ -12,7 +12,7 @@ import sys
 sys.path.insert(0, 'src')
 
 import mlx.core as mx
-import numpy as np
+
 
 def mlx_native_fft_conv(u, k_time, D):
     """

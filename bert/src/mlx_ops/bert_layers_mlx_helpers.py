@@ -21,25 +21,10 @@ from typing import Optional
 import mlx.core as mx
 import mlx.nn as nn
 
-def _get_profile():
-    try:
-        from bert.src.mlx_ops import get_profile as gp  # type: ignore
-        return gp()
-    except Exception:
-        # Fallback when loaded as a loose module: try absolute import with local path
-        try:
-            import os, sys
-            pkg_root = os.path.dirname(__file__)
-            if pkg_root not in sys.path:
-                sys.path.insert(0, pkg_root)
-            from bert.src.mlx_ops import get_profile as gp2  # type: ignore
-            return gp2()
-        except Exception:
-            class _P:
-                layer_norm_strict = False
-            return _P()
 
-from src.mm_mlx.monarch_mixer_mlx import MonarchMixerSequenceMixing
+from .hyperprofiles_mlx import get_profile as _get_profile
+
+from .monarch_mixer import MonarchMixerSequenceMixing
 
 
 class Embedding(nn.Module):
@@ -58,13 +43,10 @@ class Embedding(nn.Module):
 
 
 def _get_embedding(vocab_size: int, dim: int, padding_idx: Optional[int] = None):
-    # Use nn.Embedding if available; MLX Embedding may not accept padding_idx
-    if hasattr(nn, 'Embedding'):
-        try:
-            return nn.Embedding(vocab_size, dim)
-        except Exception:
-            return Embedding(vocab_size, dim, padding_idx)
-    return Embedding(vocab_size, dim, padding_idx)
+    # MLX-only: require nn.Embedding; no fallbacks
+    if not hasattr(nn, 'Embedding'):
+        raise RuntimeError('MLX nn.Embedding is required')
+    return nn.Embedding(vocab_size, dim)
 
 
 class MLXBertEmbeddings(nn.Module):
@@ -121,11 +103,8 @@ class MLXBertEmbeddings(nn.Module):
 class MLXBertMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # Activation via registry
-        try:
-            from bert.src.mlx_ops.activations import get_activation
-        except Exception:
-            from bert.src.mlx_ops.activations import get_activation
+        # Activation via registry (strict import)
+        from .activations import get_activation
         act_name = getattr(config, 'mlx_mlp_activation', 'gelu_tanh')
         self.act = get_activation(act_name)
 
@@ -159,11 +138,8 @@ class MLXBertMLP(nn.Module):
 class MLXBertGLUMLP(nn.Module):
     def __init__(self, config):
         super().__init__()
-        # Activation via registry
-        try:
-            from bert.src.mlx_ops.activations import get_activation
-        except Exception:
-            from bert.src.mlx_ops.activations import get_activation
+        # Activation via registry (strict import)
+        from .activations import get_activation
         act_name = getattr(config, 'mlx_mlp_activation', 'gelu_tanh')
         self.act = get_activation(act_name)
 

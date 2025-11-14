@@ -3,9 +3,10 @@ MLX-adapted einops operations
 Core rearrange, reduce, repeat functions for MLX arrays
 """
 
+from typing import Dict, Tuple, List
+
 import mlx.core as mx
-from typing import Dict, Tuple, List, Optional, Union
-import re
+
 
 def _parse_shape_spec(pattern: str, known_axes: Dict[str, int] = None) -> Tuple[List, List]:
     """Parse einops pattern like 'b h w c' or '(b h) w c'"""

@@ -1,8 +1,9 @@
 #!/usr/bin/env python
 import os
 import sys
-import numpy as np
+
 import mlx.core as mx
+import numpy as np
 
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.append(os.path.join(repo_root, 'src'))

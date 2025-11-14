@@ -7,17 +7,14 @@ MLX’s 3‑tap per-channel op) and use Torch Hyena for long-conv with MLX weigh
 copied over. This avoids differences from Conv1d(groups) in the original repo.
 """
 
-import numpy as np
-
-import torch
-import torch.nn as tnn
-
 import mlx.core as mx
 import mlx.nn as mnn
-
-from mm_mlx.monarch_mixer_mlx import MonarchMixerSequenceMixing as MLXMixer
-from mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
+import numpy as np
+import torch
+import torch.nn as tnn
 from mm.hyena_utils import HyenaFilter as TorchHyena
+from mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
+from mm_mlx.monarch_mixer_mlx import MonarchMixerSequenceMixing as MLXMixer
 
 
 def _to_torch(a):

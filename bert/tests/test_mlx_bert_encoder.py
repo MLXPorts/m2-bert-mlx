@@ -1,9 +1,9 @@
 #!/usr/bin/env python
 import importlib.util
-import numpy as np
 import os
 
 import mlx.core as mx
+import numpy as np
 
 THIS_DIR = os.path.dirname(__file__)
 PKG_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..'))

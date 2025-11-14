@@ -1,44 +1,27 @@
 
 
-from beir.retrieval.search.dense import DenseRetrievalExactSearch as DRES
-import numpy as np
-from typing import List, Dict
-from tqdm import tqdm
+import logging
 import os
-import argparse
 
-from transformers import AutoTokenizer, AutoModel
+import numpy as np
+import pandas as pd
+from beir import util, LoggingHandler
+from beir.datasets.data_loader import GenericDataLoader
+from beir.retrieval import models
+from beir.retrieval.evaluation import EvaluateRetrieval
+from beir.retrieval.search.dense import DenseRetrievalExactSearch as DRES
 from huggingface_hub import hf_hub_download
-import pdb
-import torch
-from tabulate import tabulate
-
 from omegaconf import DictConfig
 from omegaconf import OmegaConf as om
-from typing import Optional, cast
-from datetime import datetime
-
-import torch
-import torch.nn.functional as F
-
+from sentence_transformers import SentenceTransformer
 from src.embeddings.create_loco import load_loco_from_hf
-from src.embeddings.dres import DenseRetrievalExactSearch as DRES
+from tabulate import tabulate
+from transformers import AutoTokenizer, AutoModel
 
 from embeddings_inference import OpenAI_Encoder, Voyager_Encoder, Cohere_Encoder, M2_BERT_Encoder, Together_Encoder
-
-import time
-from sentence_transformers import SentenceTransformer
+from src.embeddings.dres import DenseRetrievalExactSearch as DRES
 
 ######################################################################
-
-from beir import util, LoggingHandler
-import pathlib, os
-import pandas as pd
-from beir.datasets.data_loader import GenericDataLoader
-import logging
-
-from beir.retrieval.evaluation import EvaluateRetrieval
-from beir.retrieval import models
 
 #### Just some code to print debug information to stdout
 logging.basicConfig(format='%(asctime)s - %(message)s',

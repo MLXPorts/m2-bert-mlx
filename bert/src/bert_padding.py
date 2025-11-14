@@ -12,6 +12,7 @@ Functions for FlashAttention padding and unpadding
 from typing import Tuple
 
 import mlx.core as mx
+
 from mlx_ops.einops_mlx import rearrange, repeat
 
 

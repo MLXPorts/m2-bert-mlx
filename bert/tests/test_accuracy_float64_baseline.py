@@ -1,7 +1,9 @@
 #!/usr/bin/env python
-import os, sys
-import numpy as np
+import os
+import sys
+
 import mlx.core as mx
+import numpy as np
 import torch
 
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

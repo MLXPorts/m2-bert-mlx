@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import os
 import sys
-from types import ModuleType
 from typing import Callable
 
 import torch

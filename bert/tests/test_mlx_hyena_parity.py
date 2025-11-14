@@ -8,17 +8,12 @@ Compares:
 - NaN/Inf checks and gradient sanity
 """
 
-import math
+import mlx.core as mx
 import numpy as np
-
 import torch
 import torch.nn as tnn
-
-import mlx.core as mx
-import mlx.nn as mnn
-
-from mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
 from mm.hyena_utils import HyenaFilter as TorchHyena, fftconv_ref
+from mm_mlx.hyena_filter_mlx import HyenaFilter as MLXHyena
 
 
 def _to_torch(a):

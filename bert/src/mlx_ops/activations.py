@@ -15,10 +15,7 @@ Usage
 from typing import Callable, Dict, Optional
 
 import mlx.core as mx
-try:
-    from bert.src.mlx_ops.math_ops import sqrt_2_over_pi  # type: ignore
-except Exception:
-    sqrt_2_over_pi = None
+from .math_ops import sqrt_2_over_pi
 
 
 # ---- Built-in primitives (float32 throughout) ----
@@ -62,10 +59,8 @@ def _gelu_tanh(x: mx.array) -> mx.array:
     half = mx.array(0.5, dtype=mx.float32)
     one = mx.array(1.0, dtype=mx.float32)
     c044715 = mx.array(0.044715, dtype=mx.float32)
-    if sqrt_2_over_pi is not None:
-        c = sqrt_2_over_pi() if callable(sqrt_2_over_pi) else sqrt_2_over_pi
-    else:
-        c = mx.sqrt(mx.divide(mx.array(2.0, dtype=mx.float32), mx.array(3.141592653589793, dtype=mx.float32)))
+    # Use strict constant from math_ops (pure MLX Chudnovsky PI)
+    c = sqrt_2_over_pi()
     # x^3 using MLX power
     x3 = mx.power(x, mx.array(3.0, dtype=x.dtype))
     inner = mx.add(x, mx.multiply(c044715, x3))

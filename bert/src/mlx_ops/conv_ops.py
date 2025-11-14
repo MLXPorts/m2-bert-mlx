@@ -5,8 +5,9 @@ Provides 1D and 2D convolution operations with proper bias handling.
 NO NumPy - strict MLX operations only.
 """
 
+from typing import Optional
+
 import mlx.core as mx
-from typing import Optional, Tuple
 
 
 def conv1d(

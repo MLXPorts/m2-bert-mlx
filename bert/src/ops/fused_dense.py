@@ -5,14 +5,14 @@
 # TD [2022-02-27] The fused backward is also less accurate, and it might silently fail to compute
 # grad_bias (when it takes the cublas gemm code path instead of the cublasLt code path)
 
+import fused_dense_cuda  # from apex
 import numpy as np
-
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
 from torch.cuda.amp import custom_bwd, custom_fwd
 
-import fused_dense_cuda  # from apex
+
 # import fused_dense_lib as fused_dense_cuda
 
 

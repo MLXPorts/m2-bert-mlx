@@ -6,9 +6,11 @@ Checks elementwise parity across a range of values for:
 - gelu exact (erf) vs gelu_tanh (approx)
 - lecun_tanh (with float32 constants)
 """
-import os, sys, importlib.util
-import numpy as np
+import importlib.util
+import os
+
 import mlx.core as mx
+import numpy as np
 
 THIS_DIR = os.path.dirname(__file__)
 PKG_ROOT = os.path.abspath(os.path.join(THIS_DIR, '..'))

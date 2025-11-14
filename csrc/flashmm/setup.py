@@ -1,12 +1,10 @@
 # Adapted from https://github.com/NVIDIA/apex/blob/master/setup.py
-import torch
-from torch.utils.cpp_extension import BuildExtension, CppExtension, CUDAExtension, CUDA_HOME
-from setuptools import setup, find_packages
+import os
 import subprocess
 
-import sys
-import warnings
-import os
+import torch
+from setuptools import setup
+from torch.utils.cpp_extension import BuildExtension, CUDAExtension, CUDA_HOME
 
 # ninja build does not work unless include_dirs are abs path
 this_dir = os.path.dirname(os.path.abspath(__file__))

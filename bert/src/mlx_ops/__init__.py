@@ -20,12 +20,18 @@ All operations use strict MLX conventions:
 - Use mx.add, mx.multiply, etc. instead of Python operators where possible
 """
 
-# Import einops operations (vendored and adapted for MLX)
-from .einops import rearrange, repeat, reduce, einsum
-
+from .blockdiag_linear import BlockdiagLinear
+# Import block diagonal operations
+from .blockdiag_multiply import blockdiag_multiply
 # Import convolution operations
 from .conv_ops import conv1d, conv1d_fft, conv1d_fft_with_bias, depthwise_conv1d
-
+# Import einops operations (vendored and adapted for MLX)
+from .einops import rearrange, repeat, reduce, einsum
+from .hyena_filter import HyenaFilter
+# Import GEMM kernels
+from .kernels.gemm.gemm_kernels import gemm_av, gemm_at_b
+# Import Monarch operations
+from .monarch_mixer import MonarchMixerSequenceMixing
 # Import weight loading utilities
 from .weight_loading import (
     load_checkpoint,
@@ -38,17 +44,6 @@ from .weight_loading import (
 # MLX provides built-in activations - use them directly from mlx.nn:
 #   from mlx.nn import gelu, relu, silu (functional forms)
 #   or mlx.nn.GELU(), mlx.nn.ReLU(), mlx.nn.SiLU() (module forms)
-
-# Import block diagonal operations
-from .blockdiag_multiply import blockdiag_multiply
-from .blockdiag_linear import BlockdiagLinear
-
-# Import Monarch operations
-from .monarch_mixer import MonarchMixerSequenceMixing
-from .hyena_filter import HyenaFilter
-
-# Import GEMM kernels
-from .kernels.gemm.gemm_kernels import gemm_av, gemm_at_b
 
 __all__ = [
     # Einops operations

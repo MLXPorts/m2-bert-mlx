@@ -9,9 +9,11 @@ Explores:
 - Memory vs compute tradeoffs
 """
 
-import mlx.core as mx
 import time
-from typing import Dict, List, Tuple
+from typing import Dict, List
+
+import mlx.core as mx
+
 from pipeline import FFTConvPipeline, create_test_data
 
 

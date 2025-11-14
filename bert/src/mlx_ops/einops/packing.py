@@ -1,10 +1,10 @@
 from functools import lru_cache
 from typing import List, Union, TypeVar, Tuple, Sequence
 
-from einops import EinopsError
+from ._backends import get_backend
+from .parsing import ParsedExpression
 
-from einops._backends import get_backend
-from einops.parsing import ParsedExpression
+from . import EinopsError
 
 Tensor = TypeVar("Tensor")
 

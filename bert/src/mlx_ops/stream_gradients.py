@@ -11,10 +11,13 @@ Key approach:
 3. Memory handoff: Each layer's gradients computed on separate streams
 """
 
+from typing import Dict, List, Tuple
+
 import mlx.core as mx
 import mlx.nn as nn
-from typing import Dict, List, Tuple, Any
+
 from .metal_fft_conv import MetalFFTConv
+
 
 class StreamGradientComputation:
     """

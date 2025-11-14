@@ -6,9 +6,11 @@ Comprehensive test suite for FFT convolution kernels:
 - Integration with HyenaFilter
 - Accuracy vs PyTorch
 """
-import os, sys
-import numpy as np
+import os
+import sys
+
 import mlx.core as mx
+import numpy as np
 
 try:
     import torch

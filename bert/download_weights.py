@@ -5,11 +5,11 @@ This script downloads a pretrained M2-BERT model from HuggingFace and converts
 the weights to a format that can be loaded by our MLX implementation.
 """
 
-import mlx.core as mx
 import argparse
 from pathlib import Path
 from typing import Dict, Any
-import json
+
+import mlx.core as mx
 
 
 def download_model(model_name: str, cache_dir: str = ".model") -> Path:
@@ -84,8 +84,7 @@ def convert_pytorch_to_mlx(state_dict: Dict[str, Any]) -> Dict[str, mx.array]:
         Dictionary with MLX arrays
     """
     import torch
-    import numpy as np
-    
+
     mlx_weights = {}
     
     for key, value in state_dict.items():

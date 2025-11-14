@@ -11,26 +11,13 @@ Full port of hyena_utils.py with all features:
 - Bidirectional support
 """
 
-import os
-import math
-import importlib.util
 import mlx.core as mx
 import mlx.nn as nn
-
-# Mathematical constants as MLX arrays
-PI = mx.array(math.pi, dtype=mx.float32)
-sqrt_2_over_pi = mx.array(math.sqrt(2.0 / math.pi), dtype=mx.float32)
+from .math_ops import PI, sqrt_2_over_pi
 
 from .kernels.metal_fft_conv import MetalFFTConv
 from .kernels.metal_fft_conv_streamed import MetalFFTConvStreamed
-
-# HyperProfile not needed for basic inference - use sane defaults
-class _DefaultProfile:
-    gelu_mode = "erf"
-    fft_norm = "forward"
-    bidir_combine = "sum"
-
-get_profile = lambda: _DefaultProfile()
+from .hyperprofiles_mlx import get_profile
 
 
 class Sin(nn.Module):
@@ -310,16 +297,12 @@ class HyenaFilter(nn.Module):
         else:
             D = bias
 
-        prof = None
-        try:
-            prof = get_profile()
-        except Exception:
-            prof = None
+        prof = get_profile()
 
         # Combine kernels according to profile: in time or frequency domain
         if k_rev is not None:
-            space = getattr(prof, 'bidir_space', 'time') if prof is not None else 'time'
-            combine = getattr(prof, 'bidir_combine', 'sum') if prof is not None else 'sum'
+            space = getattr(prof, 'bidir_space', 'time')
+            combine = getattr(prof, 'bidir_combine', 'sum')
             # Always combine in time-domain to avoid native FFT usage
             k_fwd_time = k_fwd
             idx = mx.arange(k_rev.shape[1], dtype=mx.int32)[::-1]

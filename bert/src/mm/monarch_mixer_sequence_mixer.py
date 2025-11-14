@@ -1,9 +1,9 @@
 # Copyright (c) 2023, Dan Fu and Simran Arora.
 # Adapted from https://github.com/HazyResearch/safari/blob/main/src/models/sequence/hyena.py
 
+import opt_einsum as oe
 import torch.nn as nn
 from einops import rearrange
-import opt_einsum as oe
 
 contract = oe.contract
 from src.mm.hyena_utils import HyenaFilter

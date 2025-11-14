@@ -4,6 +4,7 @@ Tests for multi-stream FFT convolution pipeline
 """
 
 import mlx.core as mx
+
 from pipeline import FFTConvPipeline, create_test_data
 
 

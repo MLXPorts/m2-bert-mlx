@@ -20,13 +20,11 @@ Usage:
 
 import argparse
 import os
-import sys
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Dict, Optional
 
-import numpy as np
 import mlx.core as mx
-import mlx.nn as nn
+import numpy as np
 
 try:
     import torch

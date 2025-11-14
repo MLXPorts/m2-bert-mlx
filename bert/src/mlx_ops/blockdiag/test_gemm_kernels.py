@@ -10,7 +10,9 @@ import os
 import time
 
 import mlx.core as mx
+
 from .mlx_fast_metal_kernel.gemm_kernels import gemm_av, gemm_at_b
+
 
 def check(shape=(64, 128, 32)):
     """

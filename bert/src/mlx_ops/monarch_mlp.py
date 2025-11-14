@@ -7,10 +7,10 @@ Full port of BertGatedLinearUnitMLP with block-diagonal Monarch matrices
 
 import mlx.core as mx
 import mlx.nn as nn
-# numpy removed from compute module; tests live in bert/tests
-from math_ops import sqrt_2_over_pi
 
 from bert.src.mlx_ops.blockdiag_multiply import BlockDiagLinear
+# numpy removed from compute module; tests live in bert/tests
+from math_ops import sqrt_2_over_pi
 
 
 class MonarchGLUMLP(nn.Module):

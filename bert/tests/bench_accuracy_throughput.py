@@ -1,7 +1,11 @@
 #!/usr/bin/env python
-import os, sys, time, csv
-import numpy as np
+import csv
+import os
+import sys
+import time
+
 import mlx.core as mx
+import numpy as np
 import torch
 
 repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))

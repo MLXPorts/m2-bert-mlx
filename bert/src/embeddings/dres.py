@@ -1,10 +1,10 @@
+import heapq
+import logging
+from typing import Dict
+
+import torch
 from beir.retrieval.search.base import BaseSearch
 from beir.retrieval.search.dense.util import cos_sim, dot_score
-
-import logging
-import torch
-from typing import Dict
-import heapq
 
 logger = logging.getLogger(__name__)
 
