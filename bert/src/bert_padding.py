@@ -13,7 +13,7 @@ from typing import Tuple
 
 import mlx.core as mx
 
-from mlx_ops.einops_mlx import rearrange, repeat
+from mlx_ops.einops import rearrange, repeat
 
 
 def index_first_axis(input: mx.array, indices: mx.array) -> mx.array:

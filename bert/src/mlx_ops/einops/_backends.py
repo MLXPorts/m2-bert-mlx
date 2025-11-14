@@ -33,8 +33,8 @@ def get_backend(tensor) -> "AbstractBackend":
             "MLX is required but not found. Please install 'mlx' to run einops operations."
         ) from e
 
-    # Lazy import of our MLX backend wrapper
-    from .backend_mlx import MLXBackend
+    # Lazy import of our MLX backend wrapper (renamed to backend.py)
+    from .backend import MLXBackend
 
     if "mlx" not in _loaded_backends:
         _loaded_backends["mlx"] = MLXBackend()

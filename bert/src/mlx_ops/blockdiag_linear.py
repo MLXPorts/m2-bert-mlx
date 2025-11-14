@@ -13,7 +13,7 @@ import mlx.core as mx
 import mlx.nn as nn
 
 from .blockdiag_multiply import blockdiag_multiply
-from .einops_mlx import rearrange
+from .einops import rearrange
 
 
 class StructuredLinear(nn.Module):

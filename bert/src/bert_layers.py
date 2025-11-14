@@ -22,7 +22,7 @@ sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 import bert_padding as bert_padding_module
 import mlx.core as mx
 import mlx.nn as nn
-from mlx_ops.einops_mlx import rearrange
+from mlx_ops.einops import rearrange
 # consume_prefix_in_state_dict_if_present not needed
 from mlx_ops.activations import get_activation as ACT2FN
 
@@ -584,7 +584,7 @@ class BertLayer(nn.Module):
             print("NaNs in attention_output.")
             raise ValueError()
 
-            layer_output = self.mlp(attention_output)
+        layer_output = self.mlp(attention_output)
 
         if mx.isnan(layer_output).any():
             print("NaNs in layer_output.")

@@ -2,7 +2,7 @@
 
 import mlx.core as mx
 
-from .einops_mlx import rearrange
+from .einops import rearrange
 
 
 def blockdiag_weight_to_dense_weight(weight):
