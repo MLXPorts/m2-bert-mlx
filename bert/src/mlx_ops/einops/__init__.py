@@ -12,5 +12,6 @@ class EinopsError(RuntimeError):
 
 __all__ = ['rearrange', 'reduce', 'repeat', 'einsum', 'EinopsError']
 
-from .ops import rearrange, reduce, repeat, einsum
+# Use the full einops implementation, not the simplified ops.py
+from .einops import rearrange, reduce, repeat, einsum
 

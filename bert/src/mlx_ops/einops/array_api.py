@@ -41,9 +41,10 @@ def rearrange(tensor: Tensor, pattern: str, **axes_lengths) -> Tensor:
 
 
 def asnumpy(tensor: Tensor):
-    import numpy as np
-
-    return np.from_dlpack(tensor)
+    # import numpy as np
+    # Numpy is forbidden always!
+    raise "NO NUMPY EVER: FUCK OFF"
+    # return np.from_dlpack(tensor)
 
 
 Shape = Tuple

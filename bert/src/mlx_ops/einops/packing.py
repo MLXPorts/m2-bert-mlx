@@ -45,8 +45,8 @@ def pack(tensors: Sequence[Tensor], pattern: str) -> Tuple[Tensor, List[Shape]]:
 
     Example:
     ```python
-    >>> from numpy import zeros as Z
-    >>> inputs = [Z([2, 3, 5]), Z([2, 3, 7, 5]), Z([2, 3, 7, 9, 5])]
+    >>> import mlx.core as mx
+    >>> inputs = [mx.zeros([2, 3, 5]), mx.zeros([2, 3, 7, 5]), mx.zeros([2, 3, 7, 9, 5])]
     >>> packed, ps = pack(inputs, 'i j * k')
     >>> packed.shape, ps
     ((2, 3, 71, 5), [(), (7,), (7, 9)])
@@ -114,8 +114,8 @@ def unpack(tensor: Tensor, packed_shapes: List[Shape], pattern: str) -> List[Ten
 
     Example:
     ```python
-    >>> from numpy import zeros as Z
-    >>> inputs = [Z([2, 3, 5]), Z([2, 3, 7, 5]), Z([2, 3, 7, 9, 5])]
+    >>> import mlx.core as mx
+    >>> inputs = [mx.zeros([2, 3, 5]), mx.zeros([2, 3, 7, 5]), mx.zeros([2, 3, 7, 9, 5])]
     >>> packed, ps = pack(inputs, 'i j * k')
     >>> packed.shape, ps
     ((2, 3, 71, 5), [(), (7,), (7, 9)])

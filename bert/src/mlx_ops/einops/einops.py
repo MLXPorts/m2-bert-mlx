@@ -5,10 +5,6 @@ import typing
 from collections import OrderedDict
 from typing import Set, Tuple, List, Dict, Union, Callable, Optional, TypeVar, cast, Any
 
-if typing.TYPE_CHECKING:
-    # for docstrings in pycharm
-    import numpy as np  # noqa E401
-
 from . import EinopsError
 from ._backends import get_backend
 from .parsing import ParsedExpression, _ellipsis, AnonymousAxis
@@ -464,7 +460,7 @@ def reduce(tensor: Union[Tensor, List[Tensor]], pattern: str, reduction: Reducti
     Some examples:
 
     ```python
-    >>> x = np.random.randn(100, 32, 64)
+    >>> x = mx.random.normal((100, 32, 64))
 
     # perform max-reduction on the first axis
     # Axis t does not appear on RHS - thus we reduced over t
@@ -475,7 +471,7 @@ def reduce(tensor: Union[Tensor, List[Tensor]], pattern: str, reduction: Reducti
 
     # let's pretend now that x is a batch of images
     # with 4 dims: batch=10, height=20, width=30, channel=40
-    >>> x = np.random.randn(10, 20, 30, 40)
+    >>> x = mx.random.normal((10, 20, 30, 40))
 
     # 2d max-pooling with kernel size = 2 * 2 for image processing
     >>> y1 = reduce(x, 'b c (h1 h2) (w1 w2) -> b c h1 w1', 'max', h2=2, w2=2)
@@ -494,7 +490,7 @@ def reduce(tensor: Union[Tensor, List[Tensor]], pattern: str, reduction: Reducti
     (10, 20)
 
     # subtracting mean over batch for each channel;
-    # similar to x - np.mean(x, axis=(0, 2, 3), keepdims=True)
+    # similar to x - mx.mean(x, axis=(0, 2, 3), keepdims=True)
     >>> y = x - reduce(x, 'b c h w -> 1 c 1 1', 'mean')
 
     # Subtracting per-image mean for each channel
@@ -552,7 +548,7 @@ def rearrange(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths:
 
     ```python
     # suppose we have a set of 32 images in "h w c" format (height-width-channel)
-    >>> images = [np.random.randn(30, 40, 3) for _ in range(32)]
+    >>> images = [mx.random.normal((30, 40, 3)) for _ in range(32)]
 
     # stack along first (batch) axis, output is a single array
     >>> rearrange(images, 'b h w c -> b h w c').shape
@@ -609,7 +605,7 @@ def repeat(tensor: Union[Tensor, List[Tensor]], pattern: str, **axes_lengths: Si
 
     ```python
     # a grayscale image (of shape height x width)
-    >>> image = np.random.randn(30, 40)
+    >>> image = mx.random.normal((30, 40))
 
     # change it to RGB format by repeating in each channel
     >>> repeat(image, 'h w -> h w c', c=3).shape
@@ -656,12 +652,12 @@ def parse_shape(x: Tensor, pattern: str) -> dict:
 
     ```python
     # Use underscore to skip the dimension in parsing.
-    >>> x = np.zeros([2, 3, 5, 7])
+    >>> x = mx.zeros([2, 3, 5, 7])
     >>> parse_shape(x, 'batch _ h w')
     {'batch': 2, 'h': 5, 'w': 7}
 
     # `parse_shape` output can be used to specify axes_lengths for other operations:
-    >>> y = np.zeros([700])
+    >>> y = mx.zeros([700])
     >>> rearrange(y, '(b c h w) -> b c h w', **parse_shape(x, 'b _ h w')).shape
     (2, 10, 5, 7)
 
@@ -717,13 +713,13 @@ def _enumerate_directions(x):
     """
     For an n-dimensional tensor, returns tensors to enumerate each axis.
     ```python
-    x = np.zeros([2, 3, 4]) # or any other tensor
+    x = mx.zeros([2, 3, 4]) # or any other tensor
     i, j, k = _enumerate_directions(x)
     result = i + 2*j + 3*k
     ```
 
     `result[i, j, k] = i + 2j + 3k`, and also has the same shape as result
-    Works very similarly to numpy.ogrid (open indexing grid)
+    Works similarly to open indexing grid patterns
     """
     backend = get_backend(x)
     shape = backend.shape(x)
@@ -852,7 +848,7 @@ def einsum(*tensors_and_pattern: Union[Tensor, str]) -> Tensor:
 
     For a given pattern such as:
     ```python
-    >>> x, y, z = np.random.randn(3, 20, 20, 20)
+    >>> x, y, z = mx.random.normal((20, 20, 20)), mx.random.normal((20, 20, 20)), mx.random.normal((20, 20, 20))
     >>> output = einsum(x, y, z, "a b c, c b d, a g k -> a b k")
 
     ```
@@ -867,8 +863,8 @@ def einsum(*tensors_and_pattern: Union[Tensor, str]) -> Tensor:
     Let's see some additional examples:
     ```python
     # Filter a set of images:
-    >>> batched_images = np.random.randn(128, 16, 16)
-    >>> filters = np.random.randn(16, 16, 30)
+    >>> batched_images = mx.random.normal((128, 16, 16))
+    >>> filters = mx.random.normal((16, 16, 30))
     >>> result = einsum(batched_images, filters,
     ...                 "batch h w, h w channel -> batch channel")
     >>> result.shape
@@ -876,15 +872,15 @@ def einsum(*tensors_and_pattern: Union[Tensor, str]) -> Tensor:
 
     # Matrix multiplication, with an unknown input shape:
     >>> batch_shape = (50, 30)
-    >>> data = np.random.randn(*batch_shape, 20)
-    >>> weights = np.random.randn(10, 20)
+    >>> data = mx.random.normal((*batch_shape, 20))
+    >>> weights = mx.random.normal((10, 20))
     >>> result = einsum(weights, data,
     ...                 "out_dim in_dim, ... in_dim -> ... out_dim")
     >>> result.shape
     (50, 30, 10)
 
     # Matrix trace on a single tensor:
-    >>> matrix = np.random.randn(10, 10)
+    >>> matrix = mx.random.normal((10, 10))
     >>> result = einsum(matrix, "i i ->")
     >>> result.shape
     ()
