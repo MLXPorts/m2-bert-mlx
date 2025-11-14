@@ -1,69 +1,56 @@
-# Adapted from https://github.com/HazyResearch/fly/tree/master/src/models/layers
+# Adapted to MLX from the Mosaic MLX ops library.
+
+import math
+from functools import partial
 
 import mlx.core as mx
 import mlx.nn as nn
+from mlx_ops.einops import rearrange
 
 
 class StructuredLinear(nn.Module):
+    """Base class for structured linear layers implemented with MLX."""
 
-    def __init__(self, in_features, out_features, bias=True, device=None, dtype=None):
-        """Subclasses should call reset_parameters."""
+    def __init__(self, in_features, out_features, bias=True):
+        """Subclasses should call reset_parameters after setting weight shapes."""
         super().__init__()
         self.in_features = in_features
         self.out_features = out_features
-        # Subclasses may override {in,out}_features_extended
         if not hasattr(self, 'in_features_extended'):
             self.in_features_extended = in_features
         if not hasattr(self, 'out_features_extended'):
             self.out_features_extended = out_features
-        if bias:
-            self.bias = mx.zeros((out_features,), dtype=mx.float32)
-        else:
-            self.bias = None
+        self.bias = mx.zeros((out_features,), dtype=mx.float32) if bias else None
 
-    def reset_parameters(self) -> None:
-        dense_weight = self._kaiming_uniform(self.out_features_extended, self.in_features_extended)
-        self.set_weights_from_dense(dense_weight)
+    def reset_parameters(self):
+        """Initialize weights using a dense Kaiming uniform initializer."""
+        init_fn = partial(self._kaiming_uniform, a=math.sqrt(5))
+        self.set_weights_from_dense_init(init_fn)
         self.reset_parameters_bias()
 
-    def _kaiming_uniform(self, out_features, in_features):
-        fan_in_mx = mx.array(in_features, dtype=mx.float32)
-        zero = mx.array(0.0, dtype=mx.float32)
-        six = mx.array(6.0, dtype=mx.float32)
+    def _kaiming_uniform(self, tensor, a=0):
+        """Return a tensor filled with Kaiming-uniform values."""
+        fan_in = tensor.shape[1] if len(tensor.shape) > 1 else tensor.shape[0]
+        gain = math.sqrt(2.0 / (1 + a * a))
+        std = gain / math.sqrt(max(fan_in, 1))
+        bound = math.sqrt(3.0) * std
+        bound_mx = mx.array(bound, dtype=mx.float32)
+        rand = mx.random.uniform(shape=tensor.shape, dtype=mx.float32)
+        return mx.multiply(mx.subtract(rand, mx.array(0.5, dtype=mx.float32)),
+                           mx.multiply(mx.array(2.0, dtype=mx.float32), bound_mx))
 
-        # bound = sqrt(6.0 / fan_in) if fan_in > 0 else 0.0
-        is_positive = mx.greater(fan_in_mx, zero)
-        ratio = mx.divide(six, fan_in_mx)
-        bound = mx.where(is_positive, mx.sqrt(ratio), zero)
-
-        low = mx.multiply(mx.array(-1.0, dtype=mx.float32), bound)
-        high = bound
-        return mx.random.uniform(shape=(out_features, in_features), low=low, high=high)
-
-    def set_weights_from_dense(self, dense_weight: mx.array):
+    def set_weights_from_dense_init(self, dense_init_fn_):
+        """Subclasses should override to write structured weights."""
         raise NotImplementedError
 
     def reset_parameters_bias(self):
         if self.bias is not None:
-            fan_in_mx = mx.array(self.in_features, dtype=mx.float32)
-            zero_mx = mx.array(0.0, dtype=mx.float32)
-            one_mx = mx.array(1.0, dtype=mx.float32)
-
-            # fan_in = self.in_features if self.in_features > 0 else 1
-            is_positive = mx.greater(fan_in_mx, zero_mx)
-            fan_in_safe = mx.where(is_positive, fan_in_mx, one_mx)
-
-            # bound = 1.0 / sqrt(fan_in)
-            bound = mx.divide(one_mx, mx.sqrt(fan_in_safe))
-
-            low = mx.multiply(mx.array(-1.0, dtype=mx.float32), bound)
-            high = bound
-
-            self.bias = mx.random.uniform(
-                shape=self.bias.shape,
-                low=low,
-                high=high,
-            )
+            fan_in = max(self.in_features, 1)
+            bound = 1 / math.sqrt(fan_in)
+            bound_mx = mx.array(bound, dtype=mx.float32)
+            rand = mx.random.uniform(shape=self.bias.shape, dtype=mx.float32)
+            self.bias = mx.multiply(mx.subtract(rand, mx.array(0.5, dtype=mx.float32)),
+                                    mx.multiply(mx.array(2.0, dtype=mx.float32), bound_mx))
 
     @property
     def saving(self):
@@ -71,39 +58,71 @@ class StructuredLinear(nn.Module):
 
     def convert_to_dense_weight(self):
         eye = mx.eye(self.in_features, dtype=mx.float32)
-        dense_weight = self.forward_matmul(eye).T
-        return dense_weight
+        dense_weight = self.forward_matmul(eye)
+        return mx.transpose(dense_weight, (1, 0))
 
     def preprocess(self, x):
         in_features = x.shape[-1]
         if in_features < self.in_features_extended:
-            # pad_amount = self.in_features_extended - in_features
-            in_features_mx = mx.array(in_features, dtype=mx.int32)
-            in_features_ext_mx = mx.array(self.in_features_extended, dtype=mx.int32)
-            pad_amount = mx.subtract(in_features_ext_mx, in_features_mx)
-
-            zero = mx.array(0, dtype=mx.int32)
-            pads = [(zero, zero)] * (x.ndim - 1) + [(zero, pad_amount)]
-            x = mx.pad(x, pads)
+            pad = self.in_features_extended - in_features
+            pad_shape = list(x.shape)
+            pad_shape[-1] = pad
+            zeros = mx.zeros(pad_shape, dtype=x.dtype)
+            x = mx.concatenate([x, zeros], axis=-1)
         return x
 
     def postprocess(self, output):
-        out_features_extended = output.shape[-1]
-        if out_features_extended > self.out_features:
+        if output.shape[-1] > self.out_features:
             output = output[..., :self.out_features]
         return output
 
     def forward_matmul(self, x):
         raise NotImplementedError
 
-    def forward(self, x):
-        output = self.forward_matmul(x)
+    def __call__(self, x):
+        out = self.forward_matmul(x)
         if self.bias is not None:
-            bias = self.bias.astype(output.dtype)
-            # shape = (1,) * (output.ndim - 1) + (bias.shape[-1],)
-            # Build shape list using MLX scalars
-            one = mx.array(1, dtype=mx.int32)
-            ndim_minus_1 = output.ndim - 1  # Python int for loop
-            shape = [one] * ndim_minus_1 + [mx.array(bias.shape[-1], dtype=mx.int32)]
-            output = mx.add(output, mx.reshape(bias, shape))
-        return output
+            out = mx.add(out, self.bias.astype(out.dtype))
+        return out
+
+
+class BlockdiagSparsityConfig:
+    """Block-diagonal sparsity mask helper."""
+
+    def __init__(self, nblocks, block=32, global_size=0):
+        self.nblocks = nblocks
+        self.block = block
+        self.global_size = global_size
+
+    def make_layout(self, out_features, in_features):
+        assert out_features % self.block == 0 and in_features % self.block == 0
+        assert out_features % self.nblocks == 0 and in_features % self.nblocks == 0
+        block_rows = out_features // self.nblocks
+        block_cols = in_features // self.nblocks
+
+        # Build block-diagonal layout
+        rows = []
+        identity_row = mx.ones((block_rows, block_cols), dtype=mx.int32)
+        zero = mx.zeros((block_rows, block_cols), dtype=mx.int32)
+        for i in range(self.nblocks):
+            pieces = []
+            for j in range(self.nblocks):
+                pieces.append(identity_row if i == j else zero)
+            rows.append(mx.concatenate(pieces, axis=1))
+        layout = mx.concatenate(rows, axis=0)
+
+        if self.global_size > 0:
+            ones = mx.ones_like(layout)
+            row_mask = (mx.arange(out_features, dtype=mx.int32) < self.global_size).reshape(-1, 1)
+            col_mask = (mx.arange(in_features, dtype=mx.int32) < self.global_size).reshape(1, -1)
+            layout = mx.where(row_mask, ones, layout)
+            layout = mx.where(col_mask, ones, layout)
+
+        layout = rearrange(
+            layout,
+            '(p blksz) (r blksz1) -> p r (blksz blksz1)',
+            blksz=self.block,
+            blksz1=self.block,
+        )
+        mask = mx.any(layout.astype(mx.bool_), axis=-1)
+        return mask.astype(mx.int32)
