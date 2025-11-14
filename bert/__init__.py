@@ -4,6 +4,9 @@
 import os
 import sys
 
+from bert.src import create_mosaic_bert_classification, create_mosaic_bert_mlm
+from bert.src.ops.bert_padding import IndexFirstAxis, IndexPutFirstAxis
+
 # Add folder root to path to allow us to use relative imports regardless of what directory the script is run from
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
 

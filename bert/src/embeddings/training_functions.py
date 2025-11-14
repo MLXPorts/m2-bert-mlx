@@ -1,29 +1,21 @@
-
-import math
 from sentence_transformers import models, losses, datasets
-from sentence_transformers import LoggingHandler, SentenceTransformer, util, InputExample
-from sentence_transformers.evaluation import EmbeddingSimilarityEvaluator
-import logging
-from datetime import datetime
-import sys
-import os
 import gzip
-import csv
+import logging
+import os
 import random
-import pdb
-import torch
 import tarfile
-from tqdm import tqdm
+
 import numpy as np
+import torch
+from rank_bm25 import BM25Okapi
+from sentence_transformers import LoggingHandler, SentenceTransformer, util, InputExample
+from sentence_transformers import models, losses, datasets
+from sentence_transformers.evaluation import EmbeddingSimilarityEvaluator
+from src.embeddings.create_loco import load_loco_from_hf
+from tqdm import tqdm
+
 
 ##################################################
-
-from src.embeddings.create_loco import load_loco_from_hf
-
-import torch
-import torch.nn.functional as F
-import gc
-from rank_bm25 import BM25Okapi
 
 ##################################################
 

@@ -1,12 +1,12 @@
 # Adapted from https://github.com/HazyResearch/fly/tree/master/src/models/layers
 
 import math
+
 import torch
 import torch.nn as nn
 from einops import rearrange
-
-from src.mm.structured_linear import StructuredLinear
 from src.mm.blockdiag_multiply import blockdiag_multiply
+from src.mm.structured_linear import StructuredLinear
 
 
 class BlockdiagLinear(StructuredLinear):

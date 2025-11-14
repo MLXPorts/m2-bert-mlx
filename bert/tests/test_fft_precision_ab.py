@@ -1,0 +1,45 @@
+#!/usr/bin/env python
+import os
+import sys
+
+import mlx.core as mx
+import numpy as np
+import torch
+
+repo_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.append(os.path.join(repo_root, 'src'))
+
+from bert.src.mlx_ops.kernels.metal_fft_conv import MetalFFTConv
+
+
+def run_case(L=1024, seed=0):
+    """Test current kernel (precision-first path with comp_bfly=True, hermitian_exact=True)"""
+    mx.random.seed(seed)
+    B, C = 2, 8
+    u = mx.random.normal((B, C, L)).astype(mx.float32)
+    k = mx.random.normal((C, L)).astype(mx.float32)
+    D = mx.zeros((1, C, 1), dtype=mx.float32)
+
+    N = 2 * L
+    u_t = torch.from_numpy(np.array(u))
+    k_t = torch.from_numpy(np.array(k))
+    y_ref = torch.fft.irfft(torch.fft.rfft(u_t, n=N, dim=-1) * torch.fft.rfft(k_t, n=N, dim=-1).unsqueeze(0), n=N, dim=-1)[..., :L]
+
+    # Current kernel always uses precision-first path (hermitian_exact=True, comp_bfly=True)
+    conv = MetalFFTConv()
+    y = conv(u, k, D); mx.eval(y)
+    diff = np.abs(y_ref.numpy() - np.array(y))
+    return float(diff.max()), float(diff.mean())
+
+
+def main():
+    sizes = [1024, 2048, 4096]
+    print("Testing MetalFFTConv (precision-first: hermitian_exact=True, comp_bfly=True)")
+    print("-" * 60)
+    for L in sizes:
+        m, M = run_case(L=L)
+        print(f"L={L:<5} | max error: {m:.3e} | mean error: {M:.3e}")
+
+
+if __name__ == '__main__':
+    main()

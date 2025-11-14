@@ -1,8 +1,7 @@
 import math
-
 import re
-import numpy as np
 
+import numpy as np
 
 # N = 8192
 N = 16384

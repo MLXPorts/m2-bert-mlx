@@ -1,15 +1,12 @@
 # Minimal example to embed text using M2-BERT embedding models
-import numpy as np
-import os
 import argparse
+import os
 
+import numpy as np
 from huggingface_hub import hf_hub_download
-
 from omegaconf import OmegaConf as om
 
 from embeddings_inference import M2_BERT_Encoder, Together_Encoder
-
-import argparse
 
 parser = argparse.ArgumentParser(description='Your program description here.')
 parser.add_argument('--text', type=str, help='Text to embed', required=True)

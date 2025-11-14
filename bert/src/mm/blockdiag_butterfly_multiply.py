@@ -1,15 +1,14 @@
 # Adapted from https://github.com/HazyResearch/fly/tree/master/src/models/layers
 
 import math
-import numpy as np
 
-import torch
-from torch.nn import functional as F
+import mlx.core as mx
 
-from einops import rearrange
+from .. import mlx_ops
+from ..mlx_ops.einops import rearrange
 
 
-def blockdiag_butterfly_multiply_reference(x, w1_bfly, w2_bfly, version=2):
+def blockdiag_butterfly_multiply_reference(x : mx.array, w1_bfly : mx.array, w2_bfly : mx.array, version : mx.array =mx.array(2,dtype=int64)):
     """
     This implementation is slow but more likely to be correct.
     There are 3 implementations, which should all yield the same answer
@@ -20,25 +19,25 @@ def blockdiag_butterfly_multiply_reference(x, w1_bfly, w2_bfly, version=2):
     Outputs:
         out: (batch, m), where m = l * s = n * s * q / (p * r)
     """
-    if version not in [1, 2, 3]:
+    if not mx.where(version,[1, 2, 3]).any():
         raise NotImplementedError('version must be either 1, 2, or 3')
     batch, n = x.shape
     k, q, p = w1_bfly.shape
     l, s, r = w2_bfly.shape
-    assert k * p == n
-    assert l * r == k * q
+    assert mx.equal(mx.multiply(k,p),n)
+    assert mx.equal(mx.multiply(l, r),mx.multiply(k, q))
 
     x_reshaped = rearrange(x, 'b (k p) -> b k p', k=k)
-    if version == 1:  # Implementation 1 (only works for when k = q = p = l = s = r = sqrt(n))
-        assert k == q == p == l == s == r == int(math.sqrt(n))
-        return torch.einsum('bkp,kqp,qlk->blq', x_reshaped, w1_bfly, w2_bfly).reshape(batch, n)
-    elif version == 2:  # Implementation 2
-        out1 = torch.einsum('kqp,bkp->bkq', w1_bfly, x_reshaped)
+    if mx.equal(version,1):  # Implementation 1 (only works for when k = q = p = l = s = r = sqrt(n))
+        assert k.item() == q.item() == p.item() == l.item() == s.item() == r.item() == int(mx.sqrt(n))
+        return mx.einsum('bkp,kqp,qlk->blq', x_reshaped, w1_bfly, w2_bfly).reshape(batch, n)
+    elif mx.equal(version, 2):  # Implementation 2
+        out1 = mx.einsum('kqp,bkp->bkq', w1_bfly, x_reshaped)
         out1 = rearrange(rearrange(out1, 'b k q -> b (k q)'), 'b (r l) -> b l r', l=l)
-        return torch.einsum('lsr,blr->bsl', w2_bfly, out1).reshape(batch, s * l)
+        return mx.einsum('lsr,blr->bsl', w2_bfly, out1).reshape(batch, s * l)
     # Implementation 3: most likely to be correct, but it's the slowest
-    elif version == 3:
-        w1_dense = torch.block_diag(*torch.unbind(w1_bfly, dim=0))
+    elif mx.equal(version,3):
+        w1_dense = .mlx_ops.src.mlx_ops.block_diag.mlx_fast_metal_kernel(*torch.unbind(w1_bfly, dim=0))
         out1 = F.linear(x, w1_dense)
         out1 = rearrange(out1, 'b (r l) -> b (l r)', l=l)
         w2_dense = torch.block_diag(*torch.unbind(w2_bfly, dim=0))

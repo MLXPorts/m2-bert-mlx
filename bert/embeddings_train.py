@@ -1,20 +1,15 @@
 
-import math
-from sentence_transformers import models, losses, datasets
-from sentence_transformers import LoggingHandler, SentenceTransformer, util, InputExample
-from sentence_transformers.evaluation import EmbeddingSimilarityEvaluator
-import logging
-from datetime import datetime
-import sys
-import os
-import gzip
 import csv
+import gzip
+import logging
+import math
 import random
-import pdb
-import torch
-import tarfile
-from tqdm import tqdm
+from datetime import datetime
+
 import numpy as np
+from sentence_transformers import LoggingHandler, SentenceTransformer, util, InputExample
+from sentence_transformers import models, losses, datasets
+from sentence_transformers.evaluation import EmbeddingSimilarityEvaluator
 
 #### Just some code to print debug information to stdout
 logging.basicConfig(format='%(asctime)s - %(message)s',
@@ -25,25 +20,12 @@ logging.basicConfig(format='%(asctime)s - %(message)s',
 
 ##################################################
 
-import torch
-import torch.nn.functional as F
-
-import torch.multiprocessing as mp
-from torch.utils.data.distributed import DistributedSampler
-from torch.nn.parallel import DistributedDataParallel as DDP
-from torch.distributed import init_process_group, destroy_process_group
 import os
 
-import torch
-import torch.distributed as dist
 import torch.nn as nn
-import torch.optim as optim
-
-from torch.nn.parallel import DistributedDataParallel as DDP
 
 from omegaconf import DictConfig
 from omegaconf import OmegaConf as om
-from typing import Optional, cast
 import src.create_bert as bert_module
 
 ################################################
@@ -51,8 +33,6 @@ import src.create_bert as bert_module
 from src.embeddings.training_functions import gather_loco_training_examples, gather_msmarco_examples, expand_8k_model_to_32k
 
 import torch
-import torch.nn.functional as F
-import gc
 import argparse
 
 ################################################

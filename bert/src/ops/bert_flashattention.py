@@ -1,8 +1,6 @@
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-
 import flash_attn_cuda
+import torch
+import torch.nn.functional as F
 
 
 def _get_block_size(device, head_dim, is_dropout):
