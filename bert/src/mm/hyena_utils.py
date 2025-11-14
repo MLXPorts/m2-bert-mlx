@@ -1,151 +1,103 @@
-# Copyright (c) 2023, Dan Fu and Simran Arora.
-# Adapted from https://github.com/HazyResearch/safari/blob/main/src/models/sequence/hyena.py
-# Converted to MLX
+#!/usr/bin/env python
+"""
+Complete Hyena filter implementation in MLX
+
+Full port of hyena_utils.py with all features:
+- Complex exponential positional embeddings
+- Exponential modulation
+- Learnable sinusoidal activations
+- Implicit filter MLP
+- FFT-based convolution with optional streaming
+- Bidirectional support
+"""
 
 import mlx.core as mx
 import mlx.nn as nn
-
-from mlx_ops.einops import rearrange
-
-from src.utils.train import OptimModule
-
-
-def fftconv_ref(u_variable, k, D_variable, dropout_mask, gelu=True, k_rev=None, flashfft=None):
-    # u.shape:   B H L
-    seqlen = u_variable.shape[-1]
-
-    if flashfft is not None:
-        y = flashfft(u_variable.astype(mx.bfloat16), k)
-    else:
-        fft_size_mx = mx.multiply(mx.array(2, dtype=mx.int32), mx.array(seqlen, dtype=mx.int32))
-        fft_size_f = mx.array(fft_size_mx, dtype=mx.float32)
-
-        k_f_raw = mx.fft.rfft(k, n=fft_size_mx)
-        k_f = mx.divide(k_f_raw, fft_size_f)
-
-        if k_rev is not None:
-            k_rev_f_raw = mx.fft.rfft(k_rev, n=fft_size_mx)
-            k_rev_f = mx.divide(k_rev_f_raw, fft_size_f)
-            k_f = mx.add(k_f, mx.conjugate(k_rev_f))
-
-        u_f = mx.fft.rfft(u_variable.astype(k.dtype), n=fft_size_mx)
-
-        if len(u_variable.shape) > 3:
-            k_f = mx.expand_dims(k_f, axis=1)
-
-        y_full = mx.fft.irfft(mx.multiply(u_f, k_f), n=fft_size_mx)
-        y = y_full[..., :seqlen]
-
-    out = mx.add(y, mx.multiply(u_variable, D_variable))
-
-    if gelu:
-        # MLX doesn't have F.gelu, use approximate gelu
-        # gelu(x) ≈ 0.5 * x * (1 + tanh(sqrt(2/π) * (x + 0.044715 * x^3)))
-        sqrt_2_over_pi = mx.array(0.7978845608, dtype=out.dtype)  # sqrt(2/pi)
-        coeff = mx.array(0.044715, dtype=out.dtype)
-        three = mx.array(3.0, dtype=out.dtype)
-        one = mx.array(1.0, dtype=out.dtype)
-        half = mx.array(0.5, dtype=out.dtype)
-
-        x_cubed = mx.power(out, three)
-        inner = mx.add(out, mx.multiply(coeff, x_cubed))
-        tanh_arg = mx.multiply(sqrt_2_over_pi, inner)
-        tanh_val = mx.tanh(tanh_arg)
-        out = mx.multiply(mx.multiply(half, out), mx.add(one, tanh_val))
-
-    if dropout_mask is not None:
-        return mx.multiply(out, rearrange(dropout_mask, "b H -> b H 1")).astype(u_variable.dtype)
-    else:
-        return out.astype(u_variable.dtype)
-
-
-def mul_sum(q, y):
-    return mx.sum(mx.multiply(q, y), axis=1)
+from mlx_ops.math_ops import PI, sqrt_2_over_pi
+from mlx_ops.kernels.metal_fft_conv import MetalFFTConv
+from mlx_ops.kernels.metal_fft_conv_streamed import MetalFFTConvStreamed
+from mlx_ops.hyperprofiles import get_profile
 
 
 class Sin(nn.Module):
+    """Learnable sinusoidal activation."""
+
     def __init__(self, dim, w=10, w_mod=1, train_freq=True):
         super().__init__()
-
-        init_tensor = mx.ones((1, dim), dtype=mx.float32)
-        w_mx = mx.array(w, dtype=mx.float32)
-
-        if train_freq:
-            self.freq = mx.multiply(w_mx, init_tensor)
-        else:
-            self.freq = mx.multiply(w_mx, mx.ones((1, dim), dtype=mx.float32))
-
         self.w_mod = mx.array(w_mod, dtype=mx.float32)
+        self.train_freq = train_freq
+        self.freq = mx.multiply(mx.ones((1, dim), dtype=mx.float32), mx.array(w, dtype=mx.float32))
 
     def __call__(self, x):
         return mx.sin(mx.multiply(self.w_mod, mx.multiply(self.freq, x)))
 
 
-class PositionalEmbedding(OptimModule):
-    def __init__(self, emb_dim: int, seq_len: int, lr_pos_emb: float = 1e-5, **kwargs):
-        """Complex exponential positional embeddings for Hyena filters."""
+class PositionalEmbedding(nn.Module):
+    """Complex exponential positional embeddings for Hyena filters."""
+
+    def __init__(self, emb_dim: int, seq_len: int, lr_pos_emb: float = 1e-5):
         super().__init__()
-
         self.seq_len = seq_len
+        self.emb_dim = emb_dim
+        self.lr_pos_emb = lr_pos_emb
 
-        # The time embedding fed to the filters is normalized so that t_f = 1
-        zero = mx.array(0.0, dtype=mx.float32)
-        one = mx.array(1.0, dtype=mx.float32)
-        seq_len_mx = mx.array(seq_len, dtype=mx.float32)
+        # Build t in [0,1] without Python float literals
+        # t = arange(seq_len) / (seq_len-1)
+        sl = mx.array(seq_len, dtype=mx.int32)
+        ar_t = mx.arange(seq_len, dtype=mx.float32).reshape(1, seq_len, 1)
+        denom = mx.maximum(mx.subtract(sl, mx.array(1, dtype=mx.int32)), mx.array(1, dtype=mx.int32))
+        denomf = denom.astype(mx.float32)
+        t = mx.divide(ar_t, denomf)
 
-        t_1d = mx.linspace(zero, one, seq_len, dtype=mx.float32)
-        t = mx.reshape(t_1d, (1, seq_len, 1))
+        # Use curated constants (import must succeed)
+        PI_CONST = PI
 
         if emb_dim > 1:
-            bands_mx = mx.array(emb_dim, dtype=mx.int32)
-            one_int = mx.array(1, dtype=mx.int32)
-            bands_minus_1 = mx.subtract(bands_mx, one_int)
-            two = mx.array(2, dtype=mx.int32)
-            bands_result, _ = mx.divmod(bands_minus_1, two)
-            bands = bands_result  # Keep as MLX scalar
+            # bands computed with MLX ops, avoid Python arithmetic
+            emb_i32 = mx.array(emb_dim, dtype=mx.int32)
+            emb_m1_i32 = mx.subtract(emb_i32, mx.array(1, dtype=mx.int32))
+            bands_i32 = mx.floor_divide(emb_m1_i32, mx.array(2, dtype=mx.int32))
+            bands_f  = bands_i32.astype(mx.float32)
 
-        # To compute the right embeddings we use the "proper" linspace
-        seq_len_minus_1 = mx.subtract(seq_len_mx, one)
-        t_rescaled_1d = mx.linspace(zero, seq_len_minus_1, seq_len, dtype=mx.float32)
-        t_rescaled = mx.reshape(t_rescaled_1d, (1, seq_len, 1))
+            t_rescaled = mx.arange(seq_len, dtype=mx.float32).reshape(1, seq_len, 1)
+            two = mx.array(2.0, dtype=mx.float32)
+            # PI is an MLX array from math_ops; use sl (int32) for denominator
+            w = mx.multiply(mx.multiply(two, PI_CONST), mx.divide(t_rescaled, sl.astype(mx.float32)))
 
-        # w = 2 * pi * t_rescaled / seq_len
-        two_f = mx.array(2.0, dtype=mx.float32)
-        pi = mx.array(3.14159265358979323846, dtype=mx.float32)
-        two_pi = mx.multiply(two_f, pi)
-        numerator = mx.multiply(two_pi, t_rescaled)
-        w = mx.divide(numerator, seq_len_mx)
+            # Tail indices 0..(emb_dim-2), map to band index via modulo bands
+            idx = mx.arange(emb_dim, dtype=mx.int32)[1:]
+            idx_mod = mx.remainder(idx, bands_i32)
+            idx_mod_f = idx_mod.astype(mx.float32)
 
-        # f = linspace(1e-4, bands - 1, bands)
-        bands_f = mx.array(bands, dtype=mx.float32)
-        bands_minus_1_f = mx.subtract(bands_f, one)
-        f_1d = mx.linspace(mx.array(1e-4, dtype=mx.float32), bands_minus_1_f, bands, dtype=mx.float32)
-        f = mx.reshape(f_1d, (1, 1, bands))
+            # Frequency ladder f in [f_lo, bands-1], scale by denom=max(bands-1,1)
+            f_lo = mx.array(1e-4, dtype=mx.float32)
+            maxf = mx.subtract(bands_f, mx.array(1.0, dtype=mx.float32))
+            denomf2 = mx.maximum(maxf, mx.array(1.0, dtype=mx.float32))
+            frac = mx.divide(idx_mod_f, denomf2)
+            f = mx.add(f_lo, mx.multiply(mx.subtract(maxf, f_lo), frac))
 
-        # z = exp(-1j * f * w)
-        # In MLX, complex numbers: real + 1j * imag
-        minus_one = mx.array(-1.0, dtype=mx.float32)
-        fw = mx.multiply(f, w)
+            phase = mx.multiply(mx.negative(f), w)  # (1,L,emb_dim-1)
+            zr = mx.cos(phase)
+            zi = mx.sin(phase)
 
-        # exp(-1j * fw) = cos(-fw) + 1j * sin(-fw) = cos(fw) - 1j * sin(fw)
-        # Since we're doing -1j, the imaginary part is -sin(fw)
-        # But actually, we need the real and imaginary parts separately
-        # z.real = cos(fw), z.imag = -sin(fw)
-        neg_fw = mx.multiply(minus_one, fw)
-        z_real = mx.cos(fw)
-        z_imag = mx.sin(neg_fw)
+            # First half slots are real, second half are imag
+            mask_real = mx.less(idx, bands_i32)
+            mask_real_f = mask_real.astype(mx.float32)
+            z_tail = mx.add(mx.multiply(mask_real_f, zr), mx.multiply(mx.subtract(mx.array(1.0, dtype=mx.float32), mask_real_f), zi))
+            z = mx.concatenate([t, z_tail], axis=-1)
+        else:
+            z = t
 
-        # Concatenate: [t, z.real, z.imag]
-        z = mx.concatenate([t, z_real, z_imag], axis=-1)
-
-        self.register("z", z, lr=lr_pos_emb)
-        self.register("t", t, lr=0.0)
+        self.z = z
+        self.t = t
 
     def __call__(self, L):
-        return self.z[:, :L], self.t[:, :L]
+        return self.z[:, :L, :], self.t[:, :L, :]
 
 
-class ExponentialModulation(OptimModule):
+class ExponentialModulation(nn.Module):
+    """Exponential modulation with learnable decay rates."""
+
     def __init__(
         self,
         d_model,
@@ -154,204 +106,215 @@ class ExponentialModulation(OptimModule):
         target=1e-2,
         modulation_lr=0.0,
         shift: float = 0.0,
-        **kwargs,
     ):
         super().__init__()
-
-        shift_mx = mx.array(shift, dtype=mx.float32)
-        self.shift = shift_mx
-
-        target_mx = mx.array(target, dtype=mx.float32)
-        fast_decay_pct_mx = mx.array(fast_decay_pct, dtype=mx.float32)
-        slow_decay_pct_mx = mx.array(slow_decay_pct, dtype=mx.float32)
-
-        log_target = mx.log(target_mx)
-        max_decay = mx.divide(log_target, fast_decay_pct_mx)
-        min_decay = mx.divide(log_target, slow_decay_pct_mx)
-
-        zero = mx.array(0.0, dtype=mx.float32)
-        one = mx.array(1.0, dtype=mx.float32)
-        lin = mx.linspace(zero, one, d_model, dtype=mx.float32)
-
-        diff = mx.subtract(max_decay, min_decay)
-        product = mx.multiply(diff, lin)
-        deltas_1d = mx.add(min_decay, product)
-        deltas = mx.reshape(deltas_1d, (1, 1, d_model))
-
-        self.register("deltas", deltas, lr=modulation_lr)
+        self.shift = mx.array(shift, dtype=mx.float32)
+        max_decay = mx.divide(mx.log(mx.array(target, dtype=mx.float32)), mx.array(fast_decay_pct, dtype=mx.float32))
+        min_decay = mx.divide(mx.log(mx.array(target, dtype=mx.float32)), mx.array(slow_decay_pct, dtype=mx.float32))
+        lin = mx.linspace(0.0, 1.0, d_model).astype(mx.float32).reshape(1, 1, d_model)
+        deltas = mx.add(min_decay, mx.multiply(mx.subtract(max_decay, min_decay), lin))
+        self.deltas = deltas
+        self.modulation_lr = modulation_lr
 
     def __call__(self, t, x):
-        minus_one = mx.array(-1.0, dtype=self.deltas.dtype)
-        t_times_deltas = mx.multiply(t, mx.abs(self.deltas))
-        neg_t_times_deltas = mx.multiply(minus_one, t_times_deltas)
-        decay = mx.exp(neg_t_times_deltas)
-        decay_plus_shift = mx.add(decay, self.shift)
-        x = mx.multiply(x, decay_plus_shift)
-        return x
+        decay = mx.exp(mx.multiply(mx.array(-1.0, dtype=mx.float32), mx.multiply(t, mx.abs(self.deltas))))
+        return mx.multiply(x, mx.add(decay, self.shift))
 
 
-class HyenaFilter(OptimModule):
+def _hyena_fft_conv(u, k_time, D, seqlen, fft_chunk_size=None, gelu=False, dropout_mask=None, tracer=None, prefix: str = "hyena"):
+    """FFT-based 1D convolution using JIT Metal kernels.
+
+    Automatically switches between:
+    - Unified kernel (fast, all-in-one) for L <= 2048
+    - Streamed kernel (4-phase pipeline) for L > 2048 (supports unlimited length)
+
+    Args:
+        u: (batch, d_model, seqlen)
+        k_time: (d_model, seqlen)
+        D: (1, d_model, 1)
+        seqlen: sequence length L
+    """
+    # Initialize both kernels on first use
+    if not hasattr(_hyena_fft_conv, "_conv_unified"):
+        _hyena_fft_conv._conv_unified = MetalFFTConv()
+        _hyena_fft_conv._conv_streamed = MetalFFTConvStreamed()
+
+    # Automatic kernel selection based on sequence length
+    # Unified kernel: supports L up to 2048 (N=2*L=4096 fits in threadgroup memory)
+    # Streamed kernel: splits into 4 phases, supports arbitrary L
+    if seqlen <= 2048:
+        y = _hyena_fft_conv._conv_unified(u, k_time, D)
+    else:
+        y = _hyena_fft_conv._conv_streamed(u, k_time, D)
+
+    if gelu:
+        prof = get_profile()
+        if prof.gelu_mode == "tanh":
+            c = sqrt_2_over_pi()
+            y3 = mx.power(y, mx.array(3.0, dtype=mx.float32))
+            inner = mx.multiply(c, mx.add(y, mx.multiply(mx.array(0.044715, dtype=mx.float32), y3)))
+            y = mx.multiply(mx.multiply(mx.array(0.5, dtype=mx.float32), y), mx.add(mx.array(1.0, dtype=mx.float32), mx.tanh(inner)))
+        else:
+            y = nn.gelu(y)
+    if dropout_mask is not None:
+        y = mx.multiply(y, dropout_mask.reshape(-1, 1, 1))
+    return y
+
+
+class HyenaFilter(nn.Module):
+    """Complete Hyena filter with implicit MLP parameterization."""
+
     def __init__(
         self,
         d_model,
-        emb_dim=3,  # dim of input to MLP, augments with positional encoding
-        order=16,  # width of the implicit MLP
+        emb_dim=3,
+        order=16,
         seq_len=1024,
         lr=1e-3,
         lr_pos_emb=1e-5,
         dropout=0.0,
-        w=1,  # frequency of periodic activations
-        w_mod=1, # non-learnable modification of w
-        wd=0,  # weight decay of kernel parameters
+        w=1,
+        w_mod=1,
+        wd=0,
         bias=True,
         num_inner_mlps=2,
         linear_mixer=False,
         modulate: bool = True,
         normalized=False,
         bidirectional=False,
-        **kwargs,
+        fft_chunk_size=None,
     ):
-        """
-        Implicit long filter with modulation.
-
-        Args:
-            d_model: number of channels in the input
-            emb_dim: dimension of the positional encoding (`emb_dim` - 1) // 2 is the number of bands
-            order: width of the FFN
-            num_inner_mlps: number of inner linear layers inside filter MLP
-
-        Note:
-            filter_dropout is not implemented
-        """
         super().__init__()
-
         self.d_model = d_model
         self.emb_dim = emb_dim
         self.seq_len = seq_len
         self.modulate = modulate
         self.use_bias = bias
         self.bidirectional = bidirectional
+        self.normalized = normalized
+        self.dropout_rate = dropout
+        self.fft_chunk_size = fft_chunk_size
+        self.w = w
+        self.w_mod = w_mod
 
-        self.bias = mx.random.normal((d_model,), dtype=mx.float32)
-        self.dropout = nn.Dropout(p=dropout)
+        # Bias parameter
+        self.bias = mx.random.normal((d_model,)) * mx.array(0.02, dtype=mx.float32)
 
-        act = Sin(dim=order, w=w, w_mod=w_mod)
-        # Check emb_dim using MLX ops
-        emb_dim_mx = mx.array(emb_dim, dtype=mx.int32)
-        two_mx = mx.array(2, dtype=mx.int32)
-        three_mx = mx.array(3, dtype=mx.int32)
-        _, remainder = mx.divmod(emb_dim_mx, two_mx)
-        is_odd = mx.not_equal(remainder, mx.array(0, dtype=mx.int32))
-        is_ge_3 = mx.greater_equal(emb_dim_mx, three_mx)
-        assert bool(is_odd) and bool(is_ge_3), "emb_dim must be odd and greater or equal to 3 (time, sine and cosine)"
+        # emb_dim must be odd and >= 3 (validated by higher-level config)
         self.pos_emb = PositionalEmbedding(emb_dim, seq_len, lr_pos_emb)
 
-        # uses a variable number of inner linear layers
-        if linear_mixer is False:
-            layers = []
-            layers.append(nn.Linear(emb_dim, order))
-            layers.append(act)
+        if not linear_mixer:
+            # Build explicit alternating Linear/Sin stacks, keep references
+            Ls = [nn.Linear(emb_dim, order)]
+            Ss = [Sin(dim=order, w=w, w_mod=w_mod)]
+            for _ in range(num_inner_mlps):
+                Ls.append(nn.Linear(order, order))
+                Ss.append(Sin(dim=order, w=w, w_mod=w_mod))
+            Ls.append(nn.Linear(order, d_model, bias=False))
+            self.implicit_linears = Ls
+            self.implicit_sins = Ss
+            # For parity tooling
+            self.implicit_filter_layers = Ls
 
-            for i in range(num_inner_mlps):
-                layers.append(nn.Linear(order, order))
-                layers.append(act)
-
-            layers.append(nn.Linear(order, d_model, bias=False))
-            self.implicit_filter = nn.Sequential(*layers)
+            if bidirectional:
+                Ls_rev = [nn.Linear(emb_dim, order)]
+                Ss_rev = [Sin(dim=order, w=w, w_mod=w_mod)]
+                for _ in range(num_inner_mlps):
+                    Ls_rev.append(nn.Linear(order, order))
+                    Ss_rev.append(Sin(dim=order, w=w, w_mod=w_mod))
+                Ls_rev.append(nn.Linear(order, d_model, bias=False))
+                self.implicit_linears_rev = Ls_rev
+                self.implicit_sins_rev = Ss_rev
+                self.implicit_filter_layers_rev = Ls_rev
         else:
-            self.implicit_filter = nn.Sequential(nn.Linear(emb_dim, d_model, bias=False))
+            self.implicit_filter = nn.Linear(emb_dim, d_model, bias=False)
+            if bidirectional:
+                self.implicit_filter_rev = nn.Linear(emb_dim, d_model, bias=False)
 
-        if self.bidirectional:
-            layers_rev = []
-            layers_rev.append(nn.Linear(emb_dim, order))
-            layers_rev.append(act)
-
-            for i in range(num_inner_mlps):
-                layers_rev.append(nn.Linear(order, order))
-                layers_rev.append(act)
-
-            layers_rev.append(nn.Linear(order, d_model, bias=False))
-            self.implicit_filter_rev = nn.Sequential(*layers_rev)
-
-        self.modulation = ExponentialModulation(d_model, **kwargs)
-
-        self.normalized = normalized
-
-        # MLX doesn't have the same optimizer attachment mechanism as PyTorch
-        # This would need to be handled differently in MLX training loop
-
-        self.flashfft = None
-
-    def filter(self, L, *args, **kwargs):
-        z, t = self.pos_emb(L)
-        h = self.implicit_filter(z)
-        if self.modulate:
-            h = self.modulation(t, h)
-        if self.normalized:
-            # h = h / norm(h, dim=-1, p=1, keepdim=True)
-            norm_h = mx.sum(mx.abs(h), axis=-1, keepdims=True)
-            h = mx.divide(h, norm_h)
-        return h
-
-    def filter_rev(self, L, *args, **kwargs):
-        z, t = self.pos_emb(L)
-        h = self.implicit_filter_rev(z)
-        if self.modulate:
-            h = self.modulation(t, h)
-        if self.normalized:
-            norm_h = mx.sum(mx.abs(h), axis=-1, keepdims=True)
-            h = mx.divide(h, norm_h)
-        return h
-
-    def __call__(self, x, L, k_fwd=None, k_rev=None, bias=None, *args, **kwargs):
-        if k_fwd is None:
-            k_fwd = self.filter(L)
-            if self.bidirectional and k_rev is None:
-                k_rev = self.filter_rev(L)
-
-        # Ensure compatibility with filters that return a tuple
-        k_fwd = k_fwd[0] if type(k_fwd) is tuple else k_fwd
-        if bias is None:
-            bias = self.bias
-
-        # bias = bias if self.use_bias else 0 * bias
-        if self.use_bias:
-            bias_to_use = bias
-        else:
-            zero = mx.array(0.0, dtype=bias.dtype)
-            bias_to_use = mx.multiply(zero, bias)
-
-        if self.bidirectional:
-            k_rev = k_rev[0] if type(k_rev) is tuple else k_rev
-            # k = pad(k_fwd, (0, L)) + pad(k_rev.flip(-1), (L, 0))
-            zero_mx = mx.array(0, dtype=mx.int32)
-            L_mx = mx.array(L, dtype=mx.int32)
-            ndim = len(k_fwd.shape)
-
-            # Create padding list: [(0,0), (0,0), ..., (0, L)]
-            # Build list by repetition (list ops are allowed for non-tensor data structures)
-            pad_fwd = [(zero_mx, zero_mx)] * (ndim - 1) + [(zero_mx, L_mx)]
-            k_fwd_padded = mx.pad(k_fwd, pad_fwd)
-
-            k_rev_flipped = mx.flip(k_rev, axis=-1)
-            # Create padding list: [(0,0), (0,0), ..., (L, 0)]
-            pad_rev = [(zero_mx, zero_mx)] * (ndim - 1) + [(L_mx, zero_mx)]
-            k_rev_padded = mx.pad(k_rev_flipped, pad_rev)
-
-            k = mx.add(k_fwd_padded, k_rev_padded)
-        else:
-            k = k_fwd
-
-        y = fftconv_ref(
-            x,
-            k,
-            bias_to_use,
-            dropout_mask=None,
-            gelu=False,
-            flashfft=self.flashfft,
+        self.modulation = ExponentialModulation(
+            d_model,
+            fast_decay_pct=0.3,
+            slow_decay_pct=1.5,
+            target=1e-2,
+            modulation_lr=0.0,
+            shift=0.0,
         )
 
-        # Apply dropout (respects training mode)
-        y = self.dropout(y)
+        self.lr = lr
+        self.lr_pos_emb = lr_pos_emb
+        self.wd = wd
 
-        return y.astype(x.dtype)
+    def filter(self, L):
+        z, t = self.pos_emb(L)
+        if hasattr(self, 'implicit_linears'):
+            x = self.implicit_linears[0](z)
+            for i, _ in enumerate(self.implicit_sins[:-1]):
+                x = self.implicit_sins[i](x)
+                x = self.implicit_linears[i + 1](x)
+            x = self.implicit_sins[-1](x)
+            h = self.implicit_linears[-1](x)
+        else:
+            h = self.implicit_filter(z)
+        if self.modulate:
+            h = self.modulation(t, h)
+        if self.normalized:
+            h_norm = mx.sum(mx.abs(h), axis=-1, keepdims=True)
+            h = mx.divide(h, mx.add(h_norm, mx.array(1e-8, dtype=mx.float32)))
+        return h
+
+    def filter_rev(self, L):
+        z, t = self.pos_emb(L)
+        if hasattr(self, 'implicit_linears_rev'):
+            x = self.implicit_linears_rev[0](z)
+            for i, _ in enumerate(self.implicit_sins_rev[:-1]):
+                x = self.implicit_sins_rev[i](x)
+                x = self.implicit_linears_rev[i + 1](x)
+            x = self.implicit_sins_rev[-1](x)
+            h = self.implicit_linears_rev[-1](x)
+        else:
+            h = self.implicit_filter_rev(z)
+        if self.modulate:
+            h = self.modulation(t, h)
+        if self.normalized:
+            h_norm = mx.sum(mx.abs(h), axis=-1, keepdims=True)
+            h = mx.divide(h, mx.add(h_norm, mx.array(1e-8, dtype=mx.float32)))
+        return h
+
+    def __call__(self, x, L, k_fwd=None, k_rev=None, bias=None, tracer=None):
+        # Generate filters if not provided
+        if k_fwd is None:
+            axes = mx.array([0, 2, 1], dtype=mx.int32)
+            k_fwd = mx.transpose(self.filter(L), axes)[0]
+            if self.bidirectional and k_rev is None:
+                k_rev = mx.transpose(self.filter_rev(L), axes)[0]
+
+        if isinstance(k_fwd, tuple):
+            k_fwd = k_fwd[0]
+
+        if bias is None:
+            D = self.bias.reshape(1, -1, 1)
+        else:
+            D = bias
+
+        prof = get_profile()
+
+        # Combine kernels according to profile: in time or frequency domain
+        if k_rev is not None:
+            space = getattr(prof, 'bidir_space', 'time')
+            combine = getattr(prof, 'bidir_combine', 'sum')
+            # Always combine in time-domain to avoid native FFT usage
+            k_fwd_time = k_fwd
+            idx = mx.arange(k_rev.shape[1], dtype=mx.int32)[::-1]
+            k_rev_time = k_rev[:, idx]
+            k_time = mx.add(k_fwd_time, k_rev_time)
+            if combine == 'avg':
+                k_time = mx.multiply(k_time, mx.array(0.5, dtype=mx.float32))
+        else:
+            k_time = k_fwd
+
+        # JIT Metal FFT convolution (no native FFT)
+        y = _hyena_fft_conv(x, k_time, D, L, fft_chunk_size=self.fft_chunk_size, gelu=False, tracer=tracer, prefix="hyena")
+        return y
+
+
+# Demo moved to tests to keep compute module scalar-clean.

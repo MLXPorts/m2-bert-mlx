@@ -1,15 +1,54 @@
-# Copyright (c) 2023, Dan Fu and Simran Arora.
-# Adapted from https://github.com/HazyResearch/safari/blob/main/src/models/sequence/hyena.py
-# Converted to MLX
+#!/usr/bin/env python
+"""
+Complete Monarch Mixer Sequence Mixing in MLX
+
+Full port of MonarchMixerSequenceMixing - the core M2-BERT innovation
+that replaces self-attention with sub-quadratic long convolutions.
+
+Architecture:
+1. Input projection (d_model → 3*d_model)
+2. Short conv (3x1 depthwise convolution)
+3. Split into x1, x2, v
+4. Input gate: v = v * x1
+5. Long conv with learnable Hyena filter
+6. Post-gate: y = y * x2
+7. Output projection
+
+Optional: Residual long conv (second Hyena path on input)
+"""
 
 import mlx.core as mx
 import mlx.nn as nn
-from mlx_ops.einops import rearrange
 
 from .hyena_utils import HyenaFilter
+from mlx_ops.kernels.metal_kernels import depthwise_conv_3tap
 
 
 class MonarchMixerSequenceMixing(nn.Module):
+    """
+    Complete Monarch Mixer for sequence mixing (replaces attention)
+
+    Uses Hyena-style gated long convolution instead of O(L²) attention.
+    Complexity: O(L log L) via FFT convolution.
+
+    Args:
+        d_model: Model dimension
+        l_max: Maximum sequence length
+        dropout: Dropout rate
+        hyena_kernel_lr: Learning rate for Hyena filter
+        bidirectional: Whether to use bidirectional filtering
+        hyena_lr_pos_emb: LR for positional embeddings
+        hyena_w: Frequency of periodic activations
+        hyena_w_mod: Modulation of frequency
+        hyena_wd: Weight decay for Hyena parameters
+        hyena_emb_dim: Embedding dimension for Hyena filter
+        hyena_filter_dropout: Dropout for Hyena filter
+        hyena_filter_order: Order (width) of implicit MLP
+        residual_long_conv: Whether to add residual long conv path
+        hyena_training_additions: Whether to add extra layernorm/dropout
+        fft_chunk_size: Optional chunk size for FFTs
+    """
+
     def __init__(
         self,
         d_model,
@@ -26,16 +65,17 @@ class MonarchMixerSequenceMixing(nn.Module):
         hyena_filter_order=16,
         residual_long_conv=False,
         hyena_training_additions=False,
+        fft_chunk_size=None,
     ):
         super().__init__()
 
         self.d_model = d_model
         self.l_max = l_max
         self.kernel_lr = hyena_kernel_lr
-        self.channels = 1
+        self.channels = 1  # Initialization constant
         self.bidirectional = bidirectional
         self.residual_long_conv = residual_long_conv
-        self.NUM_PROJECTIONS = 3
+        self.NUM_PROJECTIONS = 3  # Initialization constant
 
         print('-- Bidirectional:', self.bidirectional)
         print("-- Using Long Conv Residual:", self.residual_long_conv)
@@ -48,158 +88,224 @@ class MonarchMixerSequenceMixing(nn.Module):
         print(f"-- Hyena filter lr: {hyena_kernel_lr}")
         print(f"-- Hyena filter lr pos emb: {hyena_lr_pos_emb}")
 
+        # Main Hyena filter
         self.filter_fn = HyenaFilter(
-            self.d_model,
+            d_model,
             order=hyena_filter_order,
-            seq_len=self.l_max,
+            seq_len=l_max,
             dropout=hyena_filter_dropout,
-            bidirectional=self.bidirectional,
-            lr=hyena_kernel_lr,
+            bidirectional=bidirectional,
+            lr=hyena_kernel_lr if hyena_kernel_lr else 1e-3,
             lr_pos_emb=hyena_lr_pos_emb,
-            w=hyena_w,  # frequency of periodic activations
+            w=hyena_w,
             w_mod=hyena_w_mod,
-            wd=hyena_wd,  # weight decay of kernel parameters
+            wd=hyena_wd,
             emb_dim=hyena_emb_dim,
+            fft_chunk_size=fft_chunk_size,
         )
 
+        # Residual long conv filter (optional)
         if self.residual_long_conv:
             self.filter_fn2 = HyenaFilter(
-                self.d_model,
+                d_model,
                 order=hyena_filter_order,
-                seq_len=self.l_max,
+                seq_len=l_max,
                 dropout=hyena_filter_dropout,
-                bidirectional=self.bidirectional,
-                lr=hyena_kernel_lr,
+                bidirectional=bidirectional,
+                lr=hyena_kernel_lr if hyena_kernel_lr else 1e-3,
                 lr_pos_emb=hyena_lr_pos_emb,
-                w=hyena_w,  # frequency of periodic activations
+                w=hyena_w,
                 w_mod=hyena_w_mod,
-                wd=hyena_wd,  # weight decay of kernel parameters
+                wd=hyena_wd,
                 emb_dim=hyena_emb_dim,
+                fft_chunk_size=fft_chunk_size,
             )
 
-        # setup projections
-        self.in_linear = nn.Linear(d_model, 3 * d_model)
+        # Input projection: d_model → 3 * d_model
+        # Initialization-time dimension calculation (not in compute graph)
+        out_proj_dim = d_model * self.NUM_PROJECTIONS
+        self.in_linear = nn.Linear(d_model, out_proj_dim)
+
+        # Output projection
         self.out_linear = nn.Linear(d_model, d_model)
+
+        # Optional training additions
         self.hyena_training_additions = hyena_training_additions
         if self.hyena_training_additions:
             self.act = nn.Identity()
             self.drop = nn.Dropout(dropout)
             self.layernorm = nn.LayerNorm(d_model)
 
-        # setup short conv
-        # MLX doesn't have nn.Conv1d with groups parameter like PyTorch
-        # We'll implement depthwise convolution manually or use a custom layer
-        # For now, using a placeholder - this needs proper implementation
-        total_width_mx = mx.array(self.d_model, dtype=mx.int32)
-        num_proj_mx = mx.array(self.NUM_PROJECTIONS, dtype=mx.int32)
-        total_width = int(mx.multiply(total_width_mx, num_proj_mx))
+        # Short convolution (depthwise)
+        total_width = self.d_model * self.NUM_PROJECTIONS
 
-        # Store conv parameters - will implement manual depthwise conv
-        self.short_filter_kernel_size = 3
-        self.short_filter_padding = 2
-        self.short_filter_channels = total_width
-        # Initialize depthwise conv weights: (groups, kernel_size) where groups = channels
-        self.short_filter_weight = mx.random.normal((total_width, 3), dtype=mx.float32)
+        # Depthwise Conv1d with bias (like PyTorch nn.Conv1d with groups=channels)
+        self.short_filter_weight = mx.random.normal((total_width, 3)) * mx.array(0.02, dtype=mx.float32)
         self.short_filter_bias = mx.zeros((total_width,), dtype=mx.float32)
 
-
-    def _depthwise_conv1d(self, x, weight, bias, padding):
+    def depthwise_conv1d(self, x, kernel_size=3, padding=2):
         """
-        Manual depthwise 1D convolution.
-        x: (batch, channels, length)
-        weight: (channels, kernel_size)
-        bias: (channels,)
+        Depthwise 1D convolution using Metal kernel
+
+        Args:
+            x: (batch, channels, length)
+            kernel_size: Convolution kernel size (must be 3)
+            padding: Padding (ignored - kernel uses padding=1)
+
+        Returns:
+            out: (batch, channels, length)
         """
-        B, C, L = x.shape
-        K = weight.shape[1]  # kernel_size = 3
+        batch, channels, length = x.shape
 
-        # Pad the input: padding=2 means add 2 on each side
-        pad_left = padding
-        pad_right = padding
-        zero = mx.array(0, dtype=mx.int32)
-        pads = [(zero, zero), (zero, zero), (mx.array(pad_left, dtype=mx.int32), mx.array(pad_right, dtype=mx.int32))]
-        x_padded = mx.pad(x, pads)
+        # Use Metal kernel for 3-tap depthwise conv with bias
+        result = depthwise_conv_3tap(x, self.short_filter_weight, self.short_filter_bias)
+        return result
 
-        # Manual depthwise convolution
-        output_list = []
-        for i in range(L):
-            # Extract window of size K
-            window = x_padded[:, :, i:i+K]  # (B, C, K)
-            # Element-wise multiply with weights and sum over kernel dimension
-            conv_out = mx.sum(mx.multiply(window, weight[None, :, :]), axis=2)  # (B, C)
-            output_list.append(conv_out)
+    def __call__(self, u, tracer=None, **kwargs):
+        """
+        Forward pass
 
-        # Stack outputs
-        output = mx.stack(output_list, axis=2)  # (B, C, L)
+        Args:
+            u: (batch, length, d_model) - input
 
-        # Add bias
-        output = mx.add(output, bias[None, :, None])
-
-        return output
-
-
-    def __call__(self, u, **kwargs):
-        # u is B L H
+        Returns:
+            y: (batch, length, d_model)
+            None: (for API compatibility)
+        """
+        # Optional pre-layernorm
         if self.hyena_training_additions:
             u = self.layernorm(u)
-        L = u.shape[-2]
 
-        # in projection
+        L = u.shape[1]  # Sequence length
+
+        # Store input for residual conv
         u_orig = u
-        u = self.in_linear(u)
-        u = rearrange(u, "b l d -> b d l")
 
-        # short filter
-        uc_full = self._depthwise_conv1d(u, self.short_filter_weight, self.short_filter_bias, self.short_filter_padding)
-        uc = uc_full[..., :L]
+        # Input projection
+        u = self.in_linear(u)  # (batch, L, 3*d_model)
+        if tracer is not None:
+            try:
+                from src.utils.tracer import Tracer  # noqa: F401
+                tracer.log('monarch.in_linear', u, framework='mlx')
+            except Exception:
+                pass
 
-        # Split into 3 parts
-        d_model_mx = mx.array(self.d_model, dtype=mx.int32)
-        x1 = uc[:, :self.d_model, :]
-        two_d = int(mx.multiply(mx.array(2, dtype=mx.int32), d_model_mx))
-        x2 = uc[:, self.d_model:two_d, :]
-        v = uc[:, two_d:, :]
+        # Transpose for convolution: (batch, L, d) → (batch, d, L)
+        u = u.transpose(0, 2, 1)  # (batch, 3*d_model, L)
 
+        # Short convolution
+        uc = self.depthwise_conv1d(u, kernel_size=3, padding=2)
+        uc = uc[..., :L]  # Truncate to original length
+        if tracer is not None:
+            try:
+                tracer.log('monarch.depthwise3', uc, framework='mlx')
+            except Exception:
+                pass
+
+        # Split into x1, x2, v
+        x1 = uc[:, :self.d_model, :]  # (batch, d_model, L)
+        x2 = uc[:, self.d_model:2 * self.d_model, :]  # (batch, d_model, L)
+        v = uc[:, 2 * self.d_model:, :]  # (batch, d_model, L)
+
+        # Input gate: v = v * x1
         v = mx.multiply(v, x1)
+        if tracer is not None:
+            try:
+                tracer.log('monarch.gated_v', v, framework='mlx')
+            except Exception:
+                pass
+
+        # Optional dropout
         if self.hyena_training_additions:
             v = self.drop(v)
 
-        k = self.filter_fn.filter(L)
-        k = rearrange(k, "c l d -> c d l")[0]  # `c` is always 1 by default
+        # Generate Hyena filter
+        k_fwd = self.filter_fn.filter(L)  # (1, L, d_model)
+        k_fwd = k_fwd.transpose(0, 2, 1)[0]  # (1, d_model, L) -> (d_model, L)
 
+        # Bidirectional filter
         if self.bidirectional:
-            k_rev = self.filter_fn.filter_rev(L)
-            k_rev = rearrange(k_rev, "c l d -> c d l")[0]
+            k_rev = self.filter_fn.filter_rev(L)  # (1, L, d_model)
+            k_rev = k_rev.transpose(0, 2, 1)[0]  # (1, d_model, L) -> (d_model, L)
         else:
             k_rev = None
 
-        y = self.filter_fn(v, L, k_fwd=k, k_rev=k_rev, bias=self.filter_fn.bias[None, :, None])
+        # Reshape bias: (d_model,) -> (1, d_model, 1)
+        bias = self.filter_fn.bias.reshape(1, -1, 1)
 
+        # Apply long convolution (Hyena)
+        y = self.filter_fn(v, L, k_fwd=k_fwd, k_rev=k_rev, bias=bias, tracer=tracer)
+        if tracer is not None:
+            try:
+                tracer.log('monarch.hyena_out', y, framework='mlx')
+            except Exception:
+                pass
+
+        # Residual long conv path (optional)
         if self.residual_long_conv:
-            k2 = self.filter_fn2.filter(L)
-            k2 = rearrange(k2, "c l d -> c d l")[0]
+            # Apply second Hyena filter to original input
+            k2_fwd = self.filter_fn2.filter(L)
+            k2_fwd = k2_fwd.transpose(0, 2, 1)[0]
 
             if self.bidirectional:
                 k2_rev = self.filter_fn2.filter_rev(L)
-                k2_rev = rearrange(k2_rev, "c l d -> c d l")[0]
+                k2_rev = k2_rev.transpose(0, 2, 1)[0]
             else:
                 k2_rev = None
 
-            # Transpose u_orig from (B, L, H) to (B, H, L)
-            u_orig_transposed = mx.transpose(u_orig, (0, 2, 1))
-            yu = self.filter_fn2(u_orig_transposed, L, k_fwd=k2, k_rev=k2_rev, bias=self.filter_fn2.bias[None, :, None])
+            bias2 = self.filter_fn2.bias.reshape(1, -1, 1)
 
-        # post gating
+            u_orig_t = u_orig.transpose(0, 2, 1)
+            yu = self.filter_fn2(u_orig_t, L, k_fwd=k2_fwd, k_rev=k2_rev, bias=bias2)
+        else:
+            yu = None
+
+        # Post-gate: y = y * x2
         y = mx.multiply(y, x2)
+        if tracer is not None:
+            try:
+                tracer.log('monarch.post_gate', y, framework='mlx')
+            except Exception:
+                pass
 
-        if self.residual_long_conv:
+        # Add residual path
+        if self.residual_long_conv and yu is not None:
             y = mx.add(y, yu)
 
-        # Transpose back from (B, H, L) to (B, L, H)
-        y = mx.transpose(y, (0, 2, 1))
+        # Transpose back: (batch, d_model, L) → (batch, L, d_model)
+        y = y.transpose(0, 2, 1)
 
+        # Optional activation + dropout
         if self.hyena_training_additions:
             y = self.drop(self.act(y))
+
+        # Output projection
         y = self.out_linear(y)
+        if tracer is not None:
+            try:
+                tracer.log('monarch.out_linear', y, framework='mlx')
+            except Exception:
+                pass
 
         return y, None
+
+
+def _demo():
+    # Demo configuration (initialization-time constants)
+    batch_size = 2
+    seq_len = 64
+    d_model = 768
+    mixer = MonarchMixerSequenceMixing(
+        d_model=d_model,
+        l_max=seq_len,
+        bidirectional=True,
+        hyena_filter_order=64,
+        residual_long_conv=True,
+    )
+    x = mx.random.normal((batch_size, seq_len, d_model))
+    y, _ = mixer(x)
+    print('Input:', x.shape, 'Output:', y.shape)
+
+
+if __name__ == '__main__':
+    _demo()
