@@ -2,7 +2,7 @@
 import argparse
 import os
 
-import numpy as np
+import mlx.core as mx
 from huggingface_hub import hf_hub_download
 from omegaconf import OmegaConf as om
 
@@ -15,7 +15,7 @@ parser.add_argument('--model-name', type=str, default="togethercomputer/m2-bert-
 parser.add_argument('--together-api', action='store_true', help='Use Together API')
 
 # File paths
-parser.add_argument('--yaml-file', type=str, default="yamls/embeddings/m2-bert-80M-32k-retrieval.yaml", help='Path to YAML file')
+parser.add_argument('--yaml-file', type=str, default="bert/yamls/embeddings/m2-bert-80M-32k-retrieval.yaml", help='Path to YAML file')
 parser.add_argument('--checkpoint', type=str, help='M2 pretrained checkpoint')
 
 args = parser.parse_args()
@@ -31,10 +31,14 @@ yaml_file = args.yaml_file
 checkpoint = args.checkpoint
 
 if not use_Together_API and checkpoint is None:
+    # Download PyTorch checkpoint from HuggingFace
     checkpoint = hf_hub_download(
-        repo_id = args.model_name,
-        filename = "model.bin"
+        repo_id=args.model_name,
+        filename="pytorch_model.bin"
     )
+    # Also download config and tokenizer
+    hf_hub_download(repo_id=args.model_name, filename="config.json")
+    hf_hub_download(repo_id=args.model_name, filename="tokenizer.json")
 
 with open(yaml_file) as f:
     yaml_cfg = om.load(f)
@@ -56,4 +60,8 @@ emb = m2_encoder.encode_queries([args.text], 1)
 print('First 10 values of the embedding')
 print(emb[:, :10])
 if args.output_file is not None:
-    np.save(args.output_file, emb)
+    # Use .npz extension for MLX save
+    if not args.output_file.endswith('.npz'):
+        args.output_file = args.output_file + '.npz'
+    mx.savez(args.output_file, embedding=emb)
+    print(f'Saved embedding to {args.output_file}')

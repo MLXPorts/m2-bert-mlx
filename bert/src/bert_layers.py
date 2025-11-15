@@ -14,7 +14,9 @@ import warnings
 from functools import partial
 from typing import List, Optional, Tuple, Union
 
-# FlashFFTConv not needed in MLX
+# Import our Metal FFT convolution kernel
+from mlx_ops.kernels.metal_fft_conv import MetalFFTConv
+
 
 # Add folder root to path to allow us to use relative imports regardless of what directory the script is run from
 sys.path.append(os.path.dirname(os.path.realpath(__file__)))
@@ -77,7 +79,7 @@ class AttentionPooler(nn.Module):
         self.activation = nn.Tanh()
         
 
-    def forward(self,
+    def __call__(self,
                 hidden_states: mx.array,
                 pool: Optional[bool] = True,
                 mask= None) -> mx.array:
@@ -144,8 +146,8 @@ class BertEmbeddings(nn.Module):
     def __init__(self, config):
         super().__init__()
         self.word_embeddings = nn.Embedding(config.vocab_size,
-                                            config.hidden_size,
-                                            padding_idx=config.pad_token_id)
+                                            config.hidden_size)
+        # Note: MLX nn.Embedding doesn't support padding_idx
         # ALiBi doesn't use position embeddings
         if config.use_positional_encodings:
             self.position_embeddings = nn.Embedding(config.max_position_embeddings, config.hidden_size)
@@ -179,14 +181,11 @@ class BertEmbeddings(nn.Module):
                                       eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         if config.use_positional_encodings:
-            position_ids = mx.expand_dims(mx.arange(config.max_position_embeddings), axis=0)
-            self.register_buffer("position_ids", position_ids)
-        self.register_buffer('token_type_ids',
-                             mx.zeros(config.max_position_embeddings,
-                                         dtype=mx.int64),
-                             persistent=False)
+            self.position_ids = mx.expand_dims(mx.arange(config.max_position_embeddings), axis=0)
+        # MLX doesn't have register_buffer - just use direct assignment
+        self.token_type_ids = mx.zeros(config.max_position_embeddings, dtype=mx.int64)
 
-    def forward(
+    def __call__(
         self,
         input_ids: Optional[mx.array] = None,
         token_type_ids: Optional[mx.array] = None,
@@ -198,10 +197,10 @@ class BertEmbeddings(nn.Module):
         if (input_ids is not None) == (inputs_embeds is not None):
             raise ValueError('Must specify either input_ids or input_embeds!')
         if input_ids is not None:
-            input_shape = input_ids.size()
+            input_shape = input_ids.shape
         else:
             assert inputs_embeds is not None  # just for type checking
-            input_shape = inputs_embeds.size()[:-1]
+            input_shape = inputs_embeds.shape[:-1]
 
         seq_length = input_shape[1]
 
@@ -284,7 +283,7 @@ class BertUnpadSelfAttention(nn.Module):
                 'Unable to import Triton; defaulting attention implementation to pytorch (this will reduce throughput when using this model).'
             )
 
-    def forward(self, hidden_states: mx.array, cu_seqlens: mx.array,
+    def __call__(self, hidden_states: mx.array, cu_seqlens: mx.array,
                 max_seqlen_in_batch: int, indices: mx.array,
                 attn_mask: mx.array, bias: mx.array) -> mx.array:
         """Perform self-attention.
@@ -363,7 +362,7 @@ class BertSelfOutput(nn.Module):
                                     eps=config.layer_norm_eps)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, hidden_states: mx.array,
+    def __call__(self, hidden_states: mx.array,
                 input_tensor: mx.array) -> mx.array:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.dropout(hidden_states)
@@ -379,7 +378,7 @@ class BertUnpadAttention(nn.Module):
         self.self = BertUnpadSelfAttention(config)
         self.output = BertSelfOutput(config)
 
-    def forward(
+    def __call__(
         self,
         input_tensor: mx.array,
         cu_seqlens: mx.array,
@@ -426,7 +425,7 @@ class BertMLP(nn.Module):
         self.gated_layers = linear_cls(config.hidden_size,
                                         config.intermediate_size,
                                         bias=False)
-        self.act = nn.GELU(approximate='none')
+        self.act = nn.GELU(approx='none')
         self.wo = linear_cls(config.intermediate_size, config.hidden_size)
 
         self.layernorm = nn.LayerNorm(config.hidden_size,
@@ -434,7 +433,7 @@ class BertMLP(nn.Module):
         
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
 
-    def forward(self, hidden_states: mx.array) -> mx.array:
+    def __call__(self, hidden_states: mx.array) -> mx.array:
         """Compute new hidden states from current hidden states.
 
         Args:
@@ -469,14 +468,14 @@ class BertGatedLinearUnitMLP(nn.Module):
             config.intermediate_size * 2,
             bias=False
         )
-        self.act = nn.GELU(approximate='none')
+        self.act = nn.GELU(approx='none')
         self.wo = linear_cls(config.intermediate_size, config.hidden_size)
         self.dropout = nn.Dropout(config.hidden_dropout_prob)
         self.layernorm = nn.LayerNorm(config.hidden_size,
                                       eps=config.layer_norm_eps)
         
 
-    def forward(self, hidden_states: mx.array) -> mx.array:
+    def __call__(self, hidden_states: mx.array) -> mx.array:
         """Compute new hidden states from current hidden states.
 
         Args:
@@ -518,7 +517,7 @@ class BertLayer(nn.Module):
 
         if config.monarch_mixer_sequence_mixing:
             if config.use_flash_mm:
-                from src.mm.flash_mm import FlashMMSequenceMixing
+                from mm.flash_mm import FlashMMSequenceMixing
                 mm_cls = FlashMMSequenceMixing
             else:
                 mm_cls = MonarchMixerSequenceMixing
@@ -546,11 +545,11 @@ class BertLayer(nn.Module):
         else:
             self.mlp = BertMLP(config)
 
-    def forward(
+    def __call__(
         self,
         hidden_states: mx.array,
-        cu_seqlens: mx.array,
-        seqlen: int,
+        cu_seqlens: Optional[mx.array] = None,
+        seqlen: Optional[int] = None,
         subset_idx: Optional[mx.array] = None,
         indices: Optional[mx.array] = None,
         attn_mask: Optional[mx.array] = None,
@@ -603,19 +602,19 @@ class BertEncoder(nn.Module):
     def __init__(self, config):
         super().__init__()
         layer = BertLayer(config)
-        self.layer = nn.ModuleList(
-            [copy.deepcopy(layer) for _ in range(config.num_hidden_layers)])
+        # MLX doesn't have ModuleList - use regular list
+        self.layer = [copy.deepcopy(layer) for _ in range(config.num_hidden_layers)]
         
-        #config.use_flash_fft = False
-        if config.use_flash_fft:
-            assert FlashFFTConv is not None, 'FlashFFTConv is not installed'
-            self.flashfft = FlashFFTConv(seqlen = 2 * config.max_position_embeddings, dtype=mx.float16)#.to(str("cuda:0"))
+        # MetalFFTConv - our JIT Metal kernel for FFT convolution
+        if hasattr(config, 'use_flash_fft') and config.use_flash_fft:
+            assert MetalFFTConv is not None, 'MetalFFTConv is not installed'
+            # MetalFFTConv doesn't need seqlen/d_model params - determined at runtime
+            self.metal_fft_conv = MetalFFTConv()
             self.use_flash_fft = config.use_flash_fft
 
             for layer in self.layer:
-                #layer.attention.flashfft = self.flashfft
-                layer.attention.filter_fn.flashfft = self.flashfft
-                layer.attention.filter_fn2.flashfft = self.flashfft
+                layer.attention.filter_fn.metal_fft_conv = self.metal_fft_conv
+                layer.attention.filter_fn2.metal_fft_conv = self.metal_fft_conv
                 layer.attention.filter_fn.use_flash_fft = config.use_flash_fft
                 layer.attention.filter_fn2.use_flash_fft = config.use_flash_fft
                 
@@ -683,7 +682,7 @@ class BertEncoder(nn.Module):
         self._current_alibi_size = size
         self.alibi = alibi
 
-    def forward(
+    def __call__(
         self,
         hidden_states: mx.array,
         attention_mask: mx.array,
@@ -705,7 +704,7 @@ class BertEncoder(nn.Module):
         ###
         
         extended_attention_mask = (1.0 - extended_attention_mask) * -10000.0
-        attention_mask_bool = attention_mask.bool()
+        attention_mask_bool = attention_mask.astype(mx.bool_)
         batch, seqlen = hidden_states.shape[:2]
 
         # Unpad inputs and mask. It will remove tokens that are padded.
@@ -815,7 +814,7 @@ class BertPooler(nn.Module):
         self.use_cls_token = config.use_cls_token
         self.sequence_token_planting = config.sequence_token_planting
 
-    def forward(self,
+    def __call__(self,
                 hidden_states: mx.array,
                 pool: Optional[bool] = True,
                 mask= None) -> mx.array:
@@ -865,7 +864,7 @@ class BertPredictionHeadTransform(nn.Module):
             self.transform_act_fn = config.hidden_act
         self.LayerNorm = nn.LayerNorm(config.hidden_size, eps=1e-12)
 
-    def forward(self, hidden_states: mx.array) -> mx.array:
+    def __call__(self, hidden_states: mx.array) -> mx.array:
         hidden_states = self.dense(hidden_states)
         hidden_states = self.transform_act_fn(hidden_states)
         hidden_states = self.LayerNorm(hidden_states)
@@ -940,7 +939,7 @@ class BertModel(BertPreTrainedModel):
     def set_input_embeddings(self, value):
         self.embeddings.word_embeddings = value
 
-    def forward(
+    def __call__(
         self,
         input_ids: mx.array,
         token_type_ids: Optional[mx.array] = None,
@@ -986,7 +985,7 @@ class BertModel(BertPreTrainedModel):
             pooled_output = self.pooler(sequence_output, mask = attention_mask) if self.pooler is not None else None
         else:
             # TD [2022-03-01]: the indexing here is very tricky.
-            attention_mask_bool = attention_mask.bool()
+            attention_mask_bool = attention_mask.astype(mx.bool_)
             subset_idx = subset_mask[attention_mask_bool]  # type: ignore
             sequence_output = encoder_outputs[-1][masked_tokens_mask[attention_mask_bool][subset_idx]]
             if self.pooler is not None:
@@ -1015,7 +1014,7 @@ class BertLMPredictionHead(nn.Module):
                                  bert_model_embedding_weights.size(0))
         self.decoder.weight = bert_model_embedding_weights
 
-    def forward(self, hidden_states: mx.array) -> mx.array:
+    def __call__(self, hidden_states: mx.array) -> mx.array:
         hidden_states = self.transform(hidden_states)
         hidden_states = self.decoder(hidden_states)
         return hidden_states
@@ -1028,7 +1027,7 @@ class BertOnlyMLMHead(nn.Module):
         self.predictions = BertLMPredictionHead(config,
                                                 bert_model_embedding_weights)
 
-    def forward(self, sequence_output: mx.array) -> mx.array:
+    def __call__(self, sequence_output: mx.array) -> mx.array:
         prediction_scores = self.predictions(sequence_output)
         return prediction_scores
 
@@ -1039,7 +1038,7 @@ class BertOnlyNSPHead(nn.Module):
         super().__init__()
         self.seq_relationship = nn.Linear(config.hidden_size, 2)
 
-    def forward(self, pooled_output: mx.array) -> mx.array:
+    def __call__(self, pooled_output: mx.array) -> mx.array:
         seq_relationship_score = self.seq_relationship(pooled_output)
         return seq_relationship_score
 
@@ -1194,7 +1193,7 @@ class BertForMaskedLM(BertPreTrainedModel):
     def set_output_embeddings(self, new_embeddings):
         self.cls.predictions.decoder = new_embeddings
 
-    def forward(
+    def __call__(
         self,
         input_ids: Optional[mx.array] = None,
         attention_mask: Optional[mx.array] = None,
@@ -1528,7 +1527,7 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         return model
 
-    def forward(
+    def __call__(
         self,
         input_ids: Optional[mx.array] = None,
         attention_mask: Optional[mx.array] = None,

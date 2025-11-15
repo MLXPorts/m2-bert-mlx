@@ -24,7 +24,6 @@ from pathlib import Path
 from typing import Dict, Optional
 
 import mlx.core as mx
-import numpy as np
 
 try:
     import torch
@@ -33,15 +32,15 @@ except ImportError:
     TORCH_AVAILABLE = False
 
 
-def extract_torch_checkpoint(checkpoint_path: str) -> Dict[str, np.ndarray]:
+def extract_torch_checkpoint(checkpoint_path: str) -> Dict[str, mx.array]:
     """
-    Extract model state_dict from PyTorch Composer checkpoint and convert to numpy.
-    
+    Extract model state_dict from PyTorch Composer checkpoint and convert to MLX.
+
     Args:
         checkpoint_path: Path to .pt checkpoint file
-        
+
     Returns:
-        Dictionary mapping parameter names to numpy arrays
+        Dictionary mapping parameter names to MLX arrays
     """
     if not TORCH_AVAILABLE:
         raise ImportError("PyTorch is required to convert checkpoints. Install with: pip install torch")
@@ -62,35 +61,36 @@ def extract_torch_checkpoint(checkpoint_path: str) -> Dict[str, np.ndarray]:
     else:
         raise ValueError(f"Unexpected checkpoint format: {type(checkpoint)}")
     
-    # Convert tensors to numpy
-    numpy_dict = {}
+    # Convert tensors to MLX
+    mlx_dict = {}
     skipped = []
-    
+
     for key, value in state_dict.items():
         if isinstance(value, torch.Tensor):
-            numpy_dict[key] = value.detach().cpu().numpy()
+            # Convert torch → MLX via numpy (immediate conversion)
+            mlx_dict[key] = mx.array(value.detach().cpu().numpy())
         else:
             skipped.append((key, type(value).__name__))
-    
+
     if skipped:
         print(f"⚠ Skipped {len(skipped)} non-tensor parameters:")
         for key, dtype in skipped[:5]:
             print(f"    {key}: {dtype}")
         if len(skipped) > 5:
             print(f"    ... and {len(skipped) - 5} more")
-    
-    print(f"✓ Converted {len(numpy_dict)} tensors to numpy")
-    
-    return numpy_dict
+
+    print(f"✓ Converted {len(mlx_dict)} tensors to MLX")
+
+    return mlx_dict
 
 
-def analyze_checkpoint(weights: Dict[str, np.ndarray]) -> Dict[str, any]:
+def analyze_checkpoint(weights: Dict[str, mx.array]) -> Dict[str, any]:
     """
     Analyze checkpoint to extract model configuration.
-    
+
     Args:
-        weights: Dictionary of parameter names to numpy arrays
-        
+        weights: Dictionary of parameter names to MLX arrays
+
     Returns:
         Dictionary of inferred configuration parameters
     """
@@ -165,26 +165,26 @@ def analyze_checkpoint(weights: Dict[str, np.ndarray]) -> Dict[str, any]:
     return config
 
 
-def save_checkpoint_npz(weights: Dict[str, np.ndarray], output_path: str):
+def save_checkpoint_npz(weights: Dict[str, mx.array], output_path: str):
     """
     Save weights as .npz file that MLX can load.
-    
+
     Args:
-        weights: Dictionary of parameter names to numpy arrays
+        weights: Dictionary of parameter names to MLX arrays
         output_path: Path to save .npz file
     """
     print(f"\nSaving to {output_path}...")
-    
+
     # Create directory if it doesn't exist
     os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
-    
-    # Save as compressed npz
-    np.savez_compressed(output_path, **weights)
-    
+
+    # Save using MLX
+    mx.savez(output_path, **weights)
+
     # Verify
-    loaded = np.load(output_path)
-    assert len(loaded.files) == len(weights), "Verification failed: file count mismatch"
-    
+    loaded = mx.load(output_path)
+    assert len(loaded) == len(weights), "Verification failed: file count mismatch"
+
     size_mb = os.path.getsize(output_path) / (1024 * 1024)
     print(f"✓ Saved {len(weights)} arrays ({size_mb:.1f} MB)")
 
@@ -331,12 +331,9 @@ def load_pretrained_m2bert(
     # Load weights
     weights = mx.load(checkpoint_path)
     print(f"✓ Loaded {len(weights)} weight tensors")
-    
-    # Convert to numpy for analysis
-    weights_np = {k: np.array(v) for k, v in weights.items()}
-    
-    # Infer configuration
-    config = analyze_checkpoint(weights_np)
+
+    # Infer configuration (analyze_checkpoint works with MLX arrays)
+    config = analyze_checkpoint(weights)
     
     # Apply overrides
     if config_override:
@@ -498,11 +495,10 @@ def main():
     elif args.command == 'analyze':
         if args.checkpoint.endswith('.npz'):
             weights = mx.load(args.checkpoint)
-            weights_np = {k: np.array(v) for k, v in weights.items()}
         else:
-            weights_np = extract_torch_checkpoint(args.checkpoint)
-        
-        config = analyze_checkpoint(weights_np)
+            weights = extract_torch_checkpoint(args.checkpoint)
+
+        config = analyze_checkpoint(weights)
         
         print("\n" + "="*70)
         print("Checkpoint Configuration:")

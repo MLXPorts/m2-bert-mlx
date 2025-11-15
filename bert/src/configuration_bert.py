@@ -22,8 +22,14 @@ class BertConfig(BertConfig):
         residual_long_conv: bool = False,
         
         # hyena and long conv hyperparameters
+        long_conv_l_max: int = 128,
+        long_conv_kernel_learning_rate: float = None,
         bidirectional: bool = True,
+        hyena_lr_pos_emb: float = 1e-5,
+        hyena_w: int = 10,
         hyena_w_mod: int = 1,
+        hyena_wd: float = 0.1,
+        hyena_emb_dim: int = 3,
         hyena_filter_dropout: float = 0.2,
         hyena_filter_order: int = 64,
         hyena_training_additions: bool = False,
@@ -34,6 +40,15 @@ class BertConfig(BertConfig):
 
         # average pooling instead of CLS token
         pool_all: bool = False,
+        use_cls_token: bool = True,
+
+        # additional options
+        sequence_token_planting: bool = False,
+        attention_pooling: bool = False,
+        gather_sentence_embeddings: bool = False,
+        use_normalized_embeddings: bool = False,
+        expand_positional_embeddings: bool = False,
+        performing_BEIR_evaluation: bool = False,
 
         **kwargs,
     ):
@@ -64,8 +79,14 @@ class BertConfig(BertConfig):
         self.residual_long_conv = residual_long_conv
 
         # hyena and long conv hyperparameters
+        self.long_conv_l_max = long_conv_l_max
+        self.long_conv_kernel_learning_rate = long_conv_kernel_learning_rate
         self.bidirectional = bidirectional
+        self.hyena_lr_pos_emb = hyena_lr_pos_emb
+        self.hyena_w = hyena_w
         self.hyena_w_mod = hyena_w_mod
+        self.hyena_wd = hyena_wd
+        self.hyena_emb_dim = hyena_emb_dim
         self.hyena_filter_dropout = hyena_filter_dropout
         self.hyena_filter_order = hyena_filter_order
         self.hyena_training_additions = hyena_training_additions
@@ -76,4 +97,13 @@ class BertConfig(BertConfig):
 
         # average pooling instead of CLS token
         self.pool_all = pool_all
-        
+        self.use_cls_token = use_cls_token
+
+        # additional options
+        self.sequence_token_planting = sequence_token_planting
+        self.attention_pooling = attention_pooling
+        self.gather_sentence_embeddings = gather_sentence_embeddings
+        self.use_normalized_embeddings = use_normalized_embeddings
+        self.expand_positional_embeddings = expand_positional_embeddings
+        self.performing_BEIR_evaluation = performing_BEIR_evaluation
+

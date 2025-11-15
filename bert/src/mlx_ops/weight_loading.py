@@ -123,13 +123,8 @@ def load_checkpoint(checkpoint_path: str) -> Dict[str, mx.array]:
         Dictionary mapping parameter names to MLX arrays
     """
     if checkpoint_path.endswith('.npz'):
-        # Load NPZ format (numpy archive)
-        import numpy as np
-        weights_np = dict(np.load(checkpoint_path))
-        weights_mlx = {}
-        for key, value in weights_np.items():
-            weights_mlx[key] = mx.array(value)
-        return weights_mlx
+        # Load NPZ format (MLX native)
+        return mx.load(checkpoint_path)
     elif checkpoint_path.endswith('.safetensors'):
         return load_safetensors_checkpoint(checkpoint_path)
     elif checkpoint_path.endswith('.pt') or checkpoint_path.endswith('.pth') or 'pytorch' in checkpoint_path:
@@ -176,9 +171,9 @@ def match_and_load_weights(
                 print(f"Unexpected key in checkpoint: {key}")
     
     print(f"Loaded weights: {len(checkpoint_state_dict) - len(unexpected_keys)} parameters")
-    if len(missing_keys) > mx.array(0, dtype=mx.int32):
+    if len(missing_keys) > 0:
         print(f"Missing keys: {len(missing_keys)}")
-    if len(unexpected_keys) > mx.array(0, dtype=mx.int32):
+    if len(unexpected_keys) > 0:
         print(f"Unexpected keys: {len(unexpected_keys)}")
     
     return missing_keys, unexpected_keys

@@ -1,45 +1,33 @@
 
 import os
+import sys
 import time
+from pathlib import Path
 from typing import List, Dict
+import json
 
-import cohere
-import numpy as np
-import openai
-import requests
-import torch
-import torch.nn.functional as F
-import voyageai
-from beir.retrieval.search.dense import DenseRetrievalExactSearch as DRES
-from omegaconf import DictConfig
-from omegaconf import OmegaConf as om
-from safetensors.torch import load_model
-from sentence_transformers import SentenceTransformer
-from tabulate import tabulate
+import mlx.core as mx
+from tokenizers import Tokenizer
 from tqdm import tqdm
-from transformers import AutoTokenizer, AutoModel
-from voyageai import get_embeddings
-
-import src.create_bert as bert_module
-from src.embeddings.create_LoCo import load_multi_news, load_pubmed_qa, load_tau_fs, \
-    load_tau_scrolls_for_summ_screen_fd_gov_report_qmsum
-from src.embeddings.create_LoCo import load_qasper, load_trivia_qa, load_kilt_dataset, load_long_bench, \
-    load_tau_scrolls_needle
 
 
 ################################################################
 
-def expand_tensor(input_tensor, cfg):
-    target_size = (1, cfg.get("evaluation_max_seq_len"))
-    padding = [0, target_size[1] - input_tensor.size(1)]
-    expanded_tensor = F.pad(input_tensor, padding)
-    assert expanded_tensor.shape[1] == target_size[1]
+def expand_tensor(input_tensor: mx.array, target_len: int) -> mx.array:
+    """Pad tensor to target length."""
+    current_len = input_tensor.shape[1]
+    if current_len >= target_len:
+        return input_tensor
+    pad_len = target_len - current_len
+    # Pad on the right: [(0, 0), (0, pad_len)]
+    padding = [(0, 0), (0, pad_len)]
+    expanded_tensor = mx.pad(input_tensor, padding)
     return expanded_tensor
 
 ################################################################
 
-import tiktoken
 def cutoff_long_text_for_embedding_generation(text, encoding, cutoff=8192):
+    import tiktoken
     encoded_text = encoding.encode(text)[:cutoff]
     decoded_text = encoding.decode(encoded_text)
     return decoded_text
@@ -67,6 +55,7 @@ def get_embedding(text, encoding, model="text-embedding-ada-002"):
 ################################################################
     
 #############################################
+
 
 class OpenAI_Encoder:
     def __init__(self, embedding_model="text-embedding-ada-002", **kwargs):
@@ -194,155 +183,199 @@ class M2_BERT_Encoder:
     def __init__(self, checkpoint=None, cfg=None, **kwargs):
 
         self.cfg = cfg
+        self.max_seq_len = cfg.get("max_seq_len", 512)
+        self.evaluation_max_seq_len = cfg.get("evaluation_max_seq_len", 512)
 
         ######################################
+        # Load model from checkpoint (.pt or .bin)
+        ######################################
 
-        model = bert_module.create_bert_classification(
-            num_labels=10, # Label value is insignificant since classifier is dropped
-            pretrained_model_name=cfg.pretrained_model_name,
-            pretrained_checkpoint=None,
-            model_config=cfg.get('model_config', None),
-            tokenizer_name=cfg.get('tokenizer_name', None),
-            gradient_checkpointing=cfg.get('gradient_checkpointing', None)
-        ).eval()
+        checkpoint_path = Path(checkpoint)
+        if not checkpoint_path.exists():
+            raise ValueError(f"Checkpoint not found: {checkpoint_path}")
 
-        #################################
+        # Add src directory to path for imports
+        sys.path.insert(0, str(Path(__file__).parent / "src"))
+        from configuration_bert import BertConfig
+        from bert_layers import BertModel
 
-        if "pytorch" in cfg.get("pretrained_checkpoint") or ".pt" in cfg.get("pretrained_checkpoint"):
-            state_dict = torch.load(cfg.get('pretrained_checkpoint'))#['module']
-            new_dict = {}
-            for key in state_dict.keys():
-                new_dict[key.replace("module.", "")] = state_dict[key]
-            state_dict = new_dict
-            
-            model = model.model
-            del model.dropout
-            del model.classifier
-            missing_keys, unexpected_keys = model.load_state_dict(state_dict, strict=True)
+        # Create config (following original m2-bert pattern)
+        model_config = cfg.get('model_config', {})
+
+        # Load config from HuggingFace format if available
+        config_path = checkpoint_path.parent / "config.json"
+        if config_path.exists():
+            with open(config_path) as f:
+                config_dict = json.load(f)
+            config_dict.update(model_config)
+            self.config = BertConfig(**config_dict)
         else:
-            missing_keys, unexpected_keys = load_model(model.model, cfg.get('pretrained_checkpoint'), strict=False)
-            model = model.model
+            # Fall back to cfg only - use from_pretrained to get base config
+            self.config = BertConfig.from_pretrained('bert-base-uncased', **model_config)
 
-        #################################
+        # Update config with all model_config items (to add custom attributes not in __init__)
+        for key, value in model_config.items():
+            self.config.update({key: value})
+
+        # Create model
+        self.model = BertModel(self.config)
+
+        # Load weights from PyTorch checkpoint
+        print(f"Loading weights from: {checkpoint_path}")
+        sys.path.insert(0, str(Path(__file__).parent.parent))
+        from utils.pytorch_loader import load_pytorch_bin
+
+        checkpoint = load_pytorch_bin(checkpoint_path)
+
+        # Extract model weights from checkpoint structure
+        # Composer format (from Mosaic training): {'state': {'model': {...}}}
+        if 'state' in checkpoint and 'model' in checkpoint['state']:
+            state_dict = checkpoint['state']['model']
+        elif 'model' in checkpoint:
+            state_dict = checkpoint['model']
+        else:
+            state_dict = checkpoint
+
+        # Clean up keys and convert to list of (name, array) tuples
+        # Original checkpoint was from BertForSequenceClassification which has .bert attribute
+        # Keys look like: "model.bert.embeddings.LayerNorm.weight"
+        # Our BertModel expects: "embeddings.LayerNorm.weight"
+
+        # Prepare weights list (clean keys)
+        weights_list = []
+        expanded_pos_emb = None
+
+        for key, value in state_dict.items():
+            # Clean key
+            clean_key = key.replace("module.", "")  # DataParallel wrapper
+            clean_key = clean_key.replace("model.", "", 1)  # Composer wrapper
+            clean_key = clean_key.replace("bert.", "", 1)  # BertForSequenceClassification wrapper
+
+            # Handle position embeddings expansion
+            if clean_key == 'embeddings.position_embeddings.weight' and self.config.expand_positional_embeddings:
+                orig_len = value.shape[0]
+                target_len = self.config.max_position_embeddings
+                if target_len > orig_len:
+                    print(f"Expanding position embeddings from {orig_len} to {target_len}")
+                    num_repeats = (target_len + orig_len - 1) // orig_len
+                    expanded_pos_emb = mx.tile(value, (num_repeats, 1))[:target_len]
+                    # Skip adding to weights_list - we'll set it manually after
+                    continue
+
+            weights_list.append((clean_key, value))
+
+        # Load into model using load_weights (strict=False to skip missing/extra keys)
+        self.model.load_weights(weights_list, strict=False)
+
+        # Manually set expanded position embeddings if needed
+        if expanded_pos_emb is not None:
+            self.model.embeddings.position_embeddings.weight = expanded_pos_emb
+            # Also expand position_ids to match
+            self.model.embeddings.position_ids = mx.expand_dims(mx.arange(self.config.max_position_embeddings), axis=0)
+            print(f"Set expanded position embeddings: {expanded_pos_emb.shape}")
 
         print("-------------------------------------------------")
-        print("Pretrained Checkpoint: " + str(checkpoint))
+        print(f"Pretrained Checkpoint: {checkpoint}")
         print("-------------------------------------------------")
-
-        if len(missing_keys) > 0:
-            print(f"Found these missing keys in the checkpoint: {', '.join(missing_keys)}")
-        if len(unexpected_keys) > 0:
-            print(f"Found these unexpected keys in the checkpoint: {', '.join(unexpected_keys)}")
-
-        if len(missing_keys) > 5:
-            print("Critical error! Missing keys: " + len(missing_keys))
-            assert False
 
         ######################################
+        # Load tokenizer (no transformers needed)
+        ######################################
 
-        self.model = model.bert
-        self.device = torch.device("cuda:0")
-        self.model.to(self.device)
-        self.model.eval()
+        # Get tokenizer name from config (e.g., "bert-base-uncased")
+        tokenizer_name = cfg.get('tokenizer_name', 'bert-base-uncased')
 
-        self.tokenizer = AutoTokenizer.from_pretrained(
-            cfg.get('pretrained_model_name'),
-            model_max_length=cfg.get("evaluation_max_seq_len"))
+        # Look for tokenizer.json locally first
+        tokenizer_dir = checkpoint_path.parent
+        tokenizer_path = tokenizer_dir / "tokenizer.json"
+
+        if not tokenizer_path.exists():
+            # Try parent directory
+            tokenizer_path = tokenizer_dir.parent / "tokenizer.json"
+
+        if not tokenizer_path.exists():
+            # Download from HuggingFace Hub
+            print(f"Downloading tokenizer from HuggingFace: {tokenizer_name}")
+            from huggingface_hub import hf_hub_download
+            tokenizer_path = hf_hub_download(
+                repo_id=tokenizer_name,
+                filename="tokenizer.json",
+                cache_dir=checkpoint_path.parent
+            )
+
+        self.tokenizer = Tokenizer.from_file(str(tokenizer_path))
 
         print("M2 BERT Encoder Loaded")
-
-        print(model)
-        print("Max Sequence Length for Model")
-        print(cfg.get("max_seq_len"))
-        print("Max Sequence Length for Classification")
-        print(cfg.get("evaluation_max_seq_len"))
+        print(f"Max Sequence Length for Model: {self.max_seq_len}")
+        print(f"Max Sequence Length for Evaluation: {self.evaluation_max_seq_len}")
     
-    # Write your own encoding query function (Returns: Query embeddings as numpy array)
-    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+    # Write your own encoding query function (Returns: Query embeddings as MLX array)
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> mx.array:
 
-        encoded_queries = torch.FloatTensor([]).cpu()
-        for queries_chunk in tqdm(split_list(queries, batch_size), total=len(queries) // batch_size + (1 if len(queries) % batch_size != 0 else 0)):
-            
-            final_input_ids = None
-            for query in queries_chunk:
-                input_ids = self.tokenizer([query], return_tensors="pt").to(self.device)
+        all_embeddings = []
+        total_batches = len(queries) // batch_size
+        if len(queries) % batch_size != 0:
+            total_batches = mx.add(mx.array(total_batches, dtype=mx.int32), mx.array(1, dtype=mx.int32)).item()
 
-                if input_ids['input_ids'].shape[1] < self.cfg.get("evaluation_max_seq_len"):
-                    input_ids['input_ids'] = expand_tensor(input_ids['input_ids'], self.cfg)
-                    input_ids['attention_mask'] = expand_tensor(input_ids['attention_mask'], self.cfg)
+        for queries_chunk in tqdm(split_list(queries, batch_size), total=total_batches):
 
-                input_ids['input_ids'] = input_ids['input_ids'][:, :self.cfg.get('evaluation_max_seq_len')]
-                input_ids['attention_mask'] = input_ids['attention_mask'][:, :self.cfg.get('evaluation_max_seq_len')]
+            # Tokenize batch
+            encodings = self.tokenizer.encode_batch(queries_chunk, add_special_tokens=True)
 
-                if final_input_ids == None:
-                    final_input_ids = input_ids
+            input_ids_list = []
+            attention_mask_list = []
+
+            for enc in encodings:
+                ids = enc.ids
+                mask = enc.attention_mask
+
+                # Pad or truncate to evaluation_max_seq_len
+                if len(ids) < self.evaluation_max_seq_len:
+                    pad_len = self.evaluation_max_seq_len - len(ids)
+                    ids = ids + [0] * pad_len  # Pad with 0
+                    mask = mask + [0] * pad_len
                 else:
-                    final_input_ids['input_ids'] = torch.cat((final_input_ids['input_ids'], input_ids['input_ids']), 0)
-                    final_input_ids['attention_mask'] = torch.cat((final_input_ids['attention_mask'], input_ids['attention_mask']), 0)
+                    ids = ids[:self.evaluation_max_seq_len]
+                    mask = mask[:self.evaluation_max_seq_len]
 
-            input_ids = final_input_ids
+                input_ids_list.append(ids)
+                attention_mask_list.append(mask)
 
-            assert input_ids['input_ids'].shape[1] == self.cfg.get("evaluation_max_seq_len")
-            assert input_ids['attention_mask'].shape[1] == self.cfg.get("evaluation_max_seq_len")
+            # Convert to MLX arrays
+            input_ids = mx.array(input_ids_list, dtype=mx.int32)
+            attention_mask = mx.array(attention_mask_list, dtype=mx.int32)
 
-            with torch.no_grad():
-                encoded_text = self.model(input_ids=input_ids['input_ids'], attention_mask=input_ids['attention_mask'])
+            # Forward pass
+            encoded_text = self.model(input_ids=input_ids, attention_mask=attention_mask)
 
-                embedding = encoded_text[1].detach().cpu()
+            # Extract pooled output (index 1 for BERT)
+            embedding = encoded_text[1] if isinstance(encoded_text, tuple) else encoded_text
 
-                encoded_queries = torch.cat((encoded_queries, embedding), 0)
+            # Evaluate and append
+            mx.eval(embedding)
+            all_embeddings.append(embedding)
 
-        if torch.isnan(encoded_queries).any():
+        # Concatenate all batches
+        encoded_queries = mx.concatenate(all_embeddings, axis=0)
+
+        # Check for NaNs
+        if mx.any(mx.isnan(encoded_queries)).item():
             print("NaNs in encoded_queries")
             raise ValueError()
 
-        return encoded_queries.numpy()
+        return encoded_queries
     
-    # Write your own encoding corpus function (Returns: Document embeddings as numpy array)  
-    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+    # Write your own encoding corpus function (Returns: Document embeddings as MLX array)
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> mx.array:
 
-        encoded_passages = torch.FloatTensor([]).cpu()
+        # Combine title and text
+        if self.evaluation_max_seq_len >= 512:
+            passages = [doc['title'] + " " + doc['text'] for doc in corpus]
+        else:
+            passages = [doc['text'] for doc in corpus]
 
-        for passages_chunk in tqdm(split_list(corpus, batch_size), total=len(corpus) // batch_size + (1 if len(corpus) % batch_size != 0 else 0)):
-            if self.cfg.get("evaluation_max_seq_len") >= 512:
-                passages_chunk = [passage['title'] + " " + passage['text'] for passage in passages_chunk]
-            else:
-                passages_chunk = [passage['text'] for passage in passages_chunk]
-            
-            final_input_ids = None
-            for passage in passages_chunk:
-                input_ids = self.tokenizer([passage], return_tensors="pt").to(self.device)
-
-                if input_ids['input_ids'].shape[1] < self.cfg.get("evaluation_max_seq_len"):
-                    input_ids['input_ids'] = expand_tensor(input_ids['input_ids'], self.cfg)
-                    input_ids['attention_mask'] = expand_tensor(input_ids['attention_mask'], self.cfg)
-
-                input_ids['input_ids'] = input_ids['input_ids'][:, :self.cfg.get('evaluation_max_seq_len')]
-                input_ids['attention_mask'] = input_ids['attention_mask'][:, :self.cfg.get('evaluation_max_seq_len')]
-
-                if final_input_ids == None:
-                    final_input_ids = input_ids
-                else:
-                    final_input_ids['input_ids'] = torch.cat((final_input_ids['input_ids'], input_ids['input_ids']), 0)
-                    final_input_ids['attention_mask'] = torch.cat((final_input_ids['attention_mask'], input_ids['attention_mask']), 0)
-
-            input_ids = final_input_ids
-
-            assert input_ids['input_ids'].shape[1] == self.cfg.get("evaluation_max_seq_len")
-            assert input_ids['attention_mask'].shape[1] == self.cfg.get("evaluation_max_seq_len")
-            
-            with torch.no_grad():
-                encoded_text = self.model(input_ids=input_ids['input_ids'], attention_mask=input_ids['attention_mask'])
-
-                embedding = encoded_text[1].detach().cpu()
-
-                encoded_passages = torch.cat((encoded_passages, embedding), 0)
-
-        if torch.isnan(encoded_passages).any():
-            print("NaNs in encoded_passages")
-            raise ValueError()
-
-        return encoded_passages.numpy()
+        # Reuse encode_queries
+        return self.encode_queries(passages, batch_size)
     
 #################################################################
     

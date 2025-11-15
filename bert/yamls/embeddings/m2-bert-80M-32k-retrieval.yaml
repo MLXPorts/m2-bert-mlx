@@ -41,8 +41,8 @@ model:
 
     pool_all: False
 
-    hidden_size: 768
-    intermediate_size: 3072
+    hidden_size: 1792
+    intermediate_size: 7168
 
     monarch_mixer_sequence_mixing: True
     long_conv_l_max: ${max_seq_len}
@@ -61,6 +61,7 @@ model:
     use_monarch_mlp: True
     monarch_mlp_nblocks: 4
     use_positional_encodings: True
+    expand_positional_embeddings: True
 
 
 ##################################################
