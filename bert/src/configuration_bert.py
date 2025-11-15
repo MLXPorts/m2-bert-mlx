@@ -15,7 +15,6 @@
 # limitations under the License.
 """ BERT model configuration """
 
-import copy
 import json
 import logging
 import os
@@ -27,6 +26,48 @@ logger = logging.getLogger(__name__)
 TRANSFORMERS_CACHE = Path(os.path.expanduser('~/.cache/mlx/transformers'))
 CONFIG_NAME = "config.json"
 WEIGHTS_NAME = "model.safetensors"
+
+
+def cached_path(url_or_filename, cache_dir=None):
+    """
+    Given something that might be a URL (or might be a local path),
+    determine which. If it's a URL, download the file and cache it, and
+    return the path to the cached file. If it's already a local path,
+    make sure the file exists and then return the path.
+
+    For MLX, we primarily expect local paths or paths to HuggingFace cache.
+
+    Args:
+        url_or_filename: Path to local file or config name
+        cache_dir: specify a cache directory to save the file to (overwrite the default cache dir).
+
+    Returns:
+        Path to the configuration file
+    """
+    if cache_dir is None:
+        cache_dir = TRANSFORMERS_CACHE
+
+    # Convert Path objects to strings
+    url_or_filename = str(url_or_filename)
+    cache_dir = str(cache_dir)
+
+    # Check if it's a local file that exists
+    if os.path.exists(url_or_filename):
+        return url_or_filename
+
+    # Check if it's in the cache directory
+    cache_path = os.path.join(cache_dir, url_or_filename)
+    if os.path.exists(cache_path):
+        return cache_path
+
+    # Check if it's a config file in cache
+    config_path = os.path.join(cache_dir, url_or_filename, CONFIG_NAME)
+    if os.path.exists(config_path):
+        return config_path
+
+    # File not found
+    raise EnvironmentError(f"file {url_or_filename} not found")
+
 
 class PretrainedConfig(object):
     r""" Base class for all configuration classes.
@@ -129,7 +170,7 @@ class PretrainedConfig(object):
         else:
             config_file = pretrained_model_name_or_path
         # redirect to the cache, if necessary
-        resolved_config_file = cached_path(config_file, cache_dir=cache_dir, force_download=force_download, proxies=proxies)
+        resolved_config_file = cached_path(config_file, cache_dir=cache_dir)
 
         if resolved_config_file == config_file:
             logger.info("loading configuration file {}".format(config_file))
@@ -219,9 +260,7 @@ BERT_PRETRAINED_CONFIG_ARCHIVE_MAP = {
 
 class BertConfig(PretrainedConfig):
     r"""
-        :class:`~transformers.BertConfig` is the configuration class to store the configuration of a
-        `BertModel`.
-
+        Configuration class for BERT and M2-BERT (Monarch Mixer BERT) with MLX support.
 
         Arguments:
             vocab_size_or_config_json_file: Vocabulary size of `inputs_ids` in `BertModel`.
@@ -245,6 +284,22 @@ class BertConfig(PretrainedConfig):
             initializer_range: The sttdev of the truncated_normal_initializer for
                 initializing all weight matrices.
             layer_norm_eps: The epsilon used by LayerNorm.
+
+            M2-BERT specific parameters:
+            alibi_starting_size: Size for alibi tensor initialization.
+            use_glu_mlp: Use GLU activation in MLP.
+            use_monarch_mlp: Use Monarch matrix factorization in MLP.
+            monarch_mlp_nblocks: Number of blocks for Monarch MLP.
+            use_positional_encodings: Use learned positional encodings.
+            monarch_mixer_sequence_mixing: Use Monarch Mixer for sequence mixing.
+            residual_long_conv: Use residual long convolution.
+            long_conv_l_max: Maximum sequence length for long convolution.
+            bidirectional: Use bidirectional convolution.
+            hyena_*: Hyena operator specific parameters.
+            use_flash_mm: Use flash matrix multiply.
+            use_flash_fft: Use flash FFT.
+            pool_all: Use average pooling instead of CLS token.
+            use_cls_token: Use CLS token for classification.
     """
     pretrained_config_archive_map = BERT_PRETRAINED_CONFIG_ARCHIVE_MAP
 
@@ -261,6 +316,35 @@ class BertConfig(PretrainedConfig):
                  type_vocab_size=2,
                  initializer_range=0.02,
                  layer_norm_eps=1e-12,
+                 # M2-BERT specific parameters
+                 alibi_starting_size=512,
+                 use_glu_mlp=True,
+                 use_monarch_mlp=False,
+                 monarch_mlp_nblocks=4,
+                 use_positional_encodings=False,
+                 monarch_mixer_sequence_mixing=False,
+                 residual_long_conv=False,
+                 long_conv_l_max=128,
+                 long_conv_kernel_learning_rate=None,
+                 bidirectional=True,
+                 hyena_lr_pos_emb=1e-5,
+                 hyena_w=10,
+                 hyena_w_mod=1,
+                 hyena_wd=0.1,
+                 hyena_emb_dim=3,
+                 hyena_filter_dropout=0.2,
+                 hyena_filter_order=64,
+                 hyena_training_additions=False,
+                 use_flash_mm=False,
+                 use_flash_fft=False,
+                 pool_all=False,
+                 use_cls_token=True,
+                 sequence_token_planting=False,
+                 attention_pooling=False,
+                 gather_sentence_embeddings=False,
+                 use_normalized_embeddings=False,
+                 expand_positional_embeddings=False,
+                 performing_BEIR_evaluation=False,
                  **kwargs):
         super(BertConfig, self).__init__(**kwargs)
         if isinstance(vocab_size_or_config_json_file, str):
@@ -269,6 +353,7 @@ class BertConfig(PretrainedConfig):
             for key, value in json_config.items():
                 self.__dict__[key] = value
         elif isinstance(vocab_size_or_config_json_file, int):
+            # Standard BERT parameters
             self.vocab_size = vocab_size_or_config_json_file
             self.hidden_size = hidden_size
             self.num_hidden_layers = num_hidden_layers
@@ -281,114 +366,36 @@ class BertConfig(PretrainedConfig):
             self.type_vocab_size = type_vocab_size
             self.initializer_range = initializer_range
             self.layer_norm_eps = layer_norm_eps
+
+            # M2-BERT specific parameters
+            self.alibi_starting_size = alibi_starting_size
+            self.use_glu_mlp = use_glu_mlp
+            self.use_monarch_mlp = use_monarch_mlp
+            self.monarch_mlp_nblocks = monarch_mlp_nblocks
+            self.use_positional_encodings = use_positional_encodings
+            self.monarch_mixer_sequence_mixing = monarch_mixer_sequence_mixing
+            self.residual_long_conv = residual_long_conv
+            self.long_conv_l_max = long_conv_l_max
+            self.long_conv_kernel_learning_rate = long_conv_kernel_learning_rate
+            self.bidirectional = bidirectional
+            self.hyena_lr_pos_emb = hyena_lr_pos_emb
+            self.hyena_w = hyena_w
+            self.hyena_w_mod = hyena_w_mod
+            self.hyena_wd = hyena_wd
+            self.hyena_emb_dim = hyena_emb_dim
+            self.hyena_filter_dropout = hyena_filter_dropout
+            self.hyena_filter_order = hyena_filter_order
+            self.hyena_training_additions = hyena_training_additions
+            self.use_flash_mm = use_flash_mm
+            self.use_flash_fft = use_flash_fft
+            self.pool_all = pool_all
+            self.use_cls_token = use_cls_token
+            self.sequence_token_planting = sequence_token_planting
+            self.attention_pooling = attention_pooling
+            self.gather_sentence_embeddings = gather_sentence_embeddings
+            self.use_normalized_embeddings = use_normalized_embeddings
+            self.expand_positional_embeddings = expand_positional_embeddings
+            self.performing_BEIR_evaluation = performing_BEIR_evaluation
         else:
             raise ValueError("First argument must be either a vocabulary size (int)"
                              " or the path to a pretrained model config file (str)")
-
-class M2BertConfig(BertConfig):
-    """Configuration class for M2-BERT (Monarch Mixer BERT) with MLX support."""
-
-    def __init__(
-        self,
-        alibi_starting_size: int = 512,
-        attention_probs_dropout_prob: float = 0.0,
-
-        # mlp
-        use_glu_mlp: bool = True,
-        use_monarch_mlp: bool = False,
-        monarch_mlp_nblocks: int = 4,
-
-        # position
-        use_positional_encodings: bool = False,
-        max_position_embeddings: int = 512,
-
-        # architecture selection
-        monarch_mixer_sequence_mixing: bool = False,
-        residual_long_conv: bool = False,
-        
-        # hyena and long conv hyperparameters
-        long_conv_l_max: int = 128,
-        long_conv_kernel_learning_rate: float = None,
-        bidirectional: bool = True,
-        hyena_lr_pos_emb: float = 1e-5,
-        hyena_w: int = 10,
-        hyena_w_mod: int = 1,
-        hyena_wd: float = 0.1,
-        hyena_emb_dim: int = 3,
-        hyena_filter_dropout: float = 0.2,
-        hyena_filter_order: int = 64,
-        hyena_training_additions: bool = False,
-        
-        # efficiency
-        use_flash_mm: bool = False,
-        use_flash_fft: bool = False,
-
-        # average pooling instead of CLS token
-        pool_all: bool = False,
-        use_cls_token: bool = True,
-
-        # additional options
-        sequence_token_planting: bool = False,
-        attention_pooling: bool = False,
-        gather_sentence_embeddings: bool = False,
-        use_normalized_embeddings: bool = False,
-        expand_positional_embeddings: bool = False,
-        performing_BEIR_evaluation: bool = False,
-
-        **kwargs,
-    ):
-        """Configuration class for M2-BERT with Monarch Mixer and Hyena support.
-
-        Args:
-            alibi_starting_size (int): Use `alibi_starting_size` to determine how large of an alibi tensor to
-                create when initializing the model. You should be able to ignore this parameter in most cases.
-                Defaults to 512.
-            attention_probs_dropout_prob (float): By default, turn off attention dropout in M2-BERT
-                (otherwise, Flash Attention will be off by default). Defaults to 0.0.
-        """
-        super().__init__(
-            attention_probs_dropout_prob=attention_probs_dropout_prob, **kwargs)
-        self.alibi_starting_size = alibi_starting_size
-
-        # mlp
-        self.use_glu_mlp = use_glu_mlp
-        self.use_monarch_mlp = use_monarch_mlp
-        self.monarch_mlp_nblocks = monarch_mlp_nblocks
-
-        # positional encodings
-        self.use_positional_encodings = use_positional_encodings
-        self.max_position_embeddings = max_position_embeddings
-
-        # architecture
-        self.monarch_mixer_sequence_mixing = monarch_mixer_sequence_mixing
-        self.residual_long_conv = residual_long_conv
-
-        # hyena and long conv hyperparameters
-        self.long_conv_l_max = long_conv_l_max
-        self.long_conv_kernel_learning_rate = long_conv_kernel_learning_rate
-        self.bidirectional = bidirectional
-        self.hyena_lr_pos_emb = hyena_lr_pos_emb
-        self.hyena_w = hyena_w
-        self.hyena_w_mod = hyena_w_mod
-        self.hyena_wd = hyena_wd
-        self.hyena_emb_dim = hyena_emb_dim
-        self.hyena_filter_dropout = hyena_filter_dropout
-        self.hyena_filter_order = hyena_filter_order
-        self.hyena_training_additions = hyena_training_additions
-
-        # efficiency
-        self.use_flash_mm = use_flash_mm
-        self.use_flash_fft = use_flash_fft
-
-        # average pooling instead of CLS token
-        self.pool_all = pool_all
-        self.use_cls_token = use_cls_token
-
-        # additional options
-        self.sequence_token_planting = sequence_token_planting
-        self.attention_pooling = attention_pooling
-        self.gather_sentence_embeddings = gather_sentence_embeddings
-        self.use_normalized_embeddings = use_normalized_embeddings
-        self.expand_positional_embeddings = expand_positional_embeddings
-        self.performing_BEIR_evaluation = performing_BEIR_evaluation
-
