@@ -13,15 +13,15 @@ from tqdm import tqdm
 
 ################################################################
 
-def expand_tensor(input_tensor: mx.array, target_len: int) -> mx.array:
+def expand_tensor(imxut_tensor: mx.array, target_len: int) -> mx.array:
     """Pad tensor to target length."""
-    current_len = input_tensor.shape[1]
+    current_len = imxut_tensor.shape[1]
     if current_len >= target_len:
-        return input_tensor
+        return imxut_tensor
     pad_len = target_len - current_len
     # Pad on the right: [(0, 0), (0, pad_len)]
     padding = [(0, 0), (0, pad_len)]
-    expanded_tensor = mx.pad(input_tensor, padding)
+    expanded_tensor = mx.pad(imxut_tensor, padding)
     return expanded_tensor
 
 ################################################################
@@ -39,15 +39,15 @@ def split_long_text_for_embedding_generation(text, encoding, cutoff=8192):
 
 ################################################################
 
-def split_list(input_list, chunk_size):
-    for i in range(0, len(input_list), chunk_size):
-        yield input_list[i:i + chunk_size]
+def split_list(imxut_list, chunk_size):
+    for i in range(0, len(imxut_list), chunk_size):
+        yield imxut_list[i:i + chunk_size]
 
 def get_embedding(text, encoding, model="text-embedding-ada-002"):
     for _ in range(5):
         try:
             text = cutoff_long_text_for_embedding_generation(text, encoding, cutoff=8192)
-            return openai.Embedding.create(input = [text], model=model)['data'][0]['embedding']
+            return openai.Embedding.create(imxut = [text], model=model)['data'][0]['embedding']
         except:
             print("Error generating embedding! Attempting again...")
             time.sleep(30)
@@ -63,37 +63,37 @@ class OpenAI_Encoder:
         self.encoding = tiktoken.encoding_for_model("text-embedding-ada-002")
         self.encoder_batch_size = 256
 
-    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> mx.array:
         
         queries = [cutoff_long_text_for_embedding_generation(query, self.encoding, cutoff=8192) for query in queries]
         total_encoded_queries = []
         for query_chunks in tqdm(split_list(queries, self.encoder_batch_size)):
             try:
-                encoded_queries = openai.Embedding.create(input=query_chunks, model=self.embedding_model)
+                encoded_queries = openai.Embedding.create(imxut=query_chunks, model=self.embedding_model)
             except:
                 time.sleep(30)
-                encoded_queries = openai.Embedding.create(input=query_chunks, model=self.embedding_model)
+                encoded_queries = openai.Embedding.create(imxut=query_chunks, model=self.embedding_model)
             encoded_queries = [query_encoding['embedding'] for query_encoding in encoded_queries['data']]
             total_encoded_queries += encoded_queries
-        return np.array(total_encoded_queries)
+        return mx.array(total_encoded_queries)
 
         
     
     # Write your own encoding corpus function (Returns: Document embeddings as numpy array)  
-    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> mx.array:
         
         passages = [passage['title'] + " " + passage['text'] for passage in corpus]
         passages = [cutoff_long_text_for_embedding_generation(passage, self.encoding, cutoff=8192) for passage in passages]
         total_encoded_passages = []
         for passage_chunks in tqdm(split_list(passages, self.encoder_batch_size)):
             try:
-                encoded_passages = openai.Embedding.create(input=passage_chunks, model=self.embedding_model)
+                encoded_passages = openai.Embedding.create(imxut=passage_chunks, model=self.embedding_model)
             except:
                 time.sleep(30)
-                encoded_passages = openai.Embedding.create(input=passage_chunks, model=self.embedding_model)
+                encoded_passages = openai.Embedding.create(imxut=passage_chunks, model=self.embedding_model)
             encoded_passages = [passage_encoding['embedding'] for passage_encoding in encoded_passages['data']]
             total_encoded_passages += encoded_passages
-        return np.array(total_encoded_passages)
+        return mx.array(total_encoded_passages)
         
 #############################################
 
@@ -103,37 +103,37 @@ class Voyager_Encoder:
         #self.encoding = tiktoken.encoding_for_model("voyage-01")
         self.encoder_batch_size = 64
 
-    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> mx.array:
         
         #queries = [cutoff_long_text_for_embedding_generation(query, self.encoding, cutoff=4096) for query in queries]
         total_encoded_queries = []
         for query_chunks in tqdm(split_list(queries, self.encoder_batch_size)):
             try:
-                encoded_queries = get_embeddings(query_chunks, model=self.embedding_model, input_type="query")
+                encoded_queries = get_embeddings(query_chunks, model=self.embedding_model, imxut_type="query")
             except:
                 time.sleep(30)
-                encoded_queries = get_embeddings(query_chunks, model=self.embedding_model, input_type="query")
+                encoded_queries = get_embeddings(query_chunks, model=self.embedding_model, imxut_type="query")
             #encoded_queries = [query_encoding for query_encoding in encoded_queries]
             total_encoded_queries += encoded_queries
-        return np.array(total_encoded_queries)
+        return mx.array(total_encoded_queries)
 
         
     
     # Write your own encoding corpus function (Returns: Document embeddings as numpy array)  
-    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> mx.array:
         
         passages = [passage['title'] + " " + passage['text'] for passage in corpus]
         #passages = [cutoff_long_text_for_embedding_generation(passage, self.encoding, cutoff=8192) for passage in passages]
         total_encoded_passages = []
         for passage_chunks in tqdm(split_list(passages, self.encoder_batch_size)):
             try:
-                encoded_passages = get_embeddings(passage_chunks, model=self.embedding_model, input_type="document")
+                encoded_passages = get_embeddings(passage_chunks, model=self.embedding_model, imxut_type="document")
             except:
                 time.sleep(30)
-                encoded_passages = get_embeddings(passage_chunks, model=self.embedding_model, input_type="document")
+                encoded_passages = get_embeddings(passage_chunks, model=self.embedding_model, imxut_type="document")
             encoded_passages = [passage_encoding for passage_encoding in encoded_passages]
             total_encoded_passages += encoded_passages
-        return np.array(total_encoded_passages)
+        return mx.array(total_encoded_passages)
         
 #############################################
 
@@ -145,37 +145,37 @@ class Cohere_Encoder:
         self.co = cohere.Client(os.environ["COHERE_API_KEY"])
         self.truncation = truncation
 
-    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> mx.array:
         
         #queries = [cutoff_long_text_for_embedding_generation(query, self.encoding, cutoff=4096) for query in queries]
         total_encoded_queries = []
         for query_chunks in tqdm(split_list(queries, self.encoder_batch_size)):
             try:
-                encoded_queries = self.co.embed(texts=query_chunks, model=self.embedding_model, input_type="search_query", truncate=self.truncation)
+                encoded_queries = self.co.embed(texts=query_chunks, model=self.embedding_model, imxut_type="search_query", truncate=self.truncation)
             except:
                 time.sleep(30)
-                encoded_queries = self.co.embed(texts=query_chunks, model=self.embedding_model, input_type="search_query", truncate=self.truncation)
+                encoded_queries = self.co.embed(texts=query_chunks, model=self.embedding_model, imxut_type="search_query", truncate=self.truncation)
             encoded_queries = encoded_queries.embeddings
             total_encoded_queries += encoded_queries
-        return np.array(total_encoded_queries)
+        return mx.array(total_encoded_queries)
 
         
     
     # Write your own encoding corpus function (Returns: Document embeddings as numpy array)  
-    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> mx.array:
         
         passages = [passage['title'] + " " + passage['text'] for passage in corpus]
         #passages = [cutoff_long_text_for_embedding_generation(passage, self.encoding, cutoff=8192) for passage in passages]
         total_encoded_passages = []
         for passage_chunks in tqdm(split_list(passages, self.encoder_batch_size)):
             try:
-                encoded_passages = self.co.embed(texts=passage_chunks, model=self.embedding_model, input_type="search_document", truncate=self.truncation)
+                encoded_passages = self.co.embed(texts=passage_chunks, model=self.embedding_model, imxut_type="search_document", truncate=self.truncation)
             except:
                 time.sleep(30)
-                encoded_passages = self.co.embed(texts=passage_chunks, model=self.embedding_model, input_type="search_document", truncate=self.truncation)
+                encoded_passages = self.co.embed(texts=passage_chunks, model=self.embedding_model, imxut_type="search_document", truncate=self.truncation)
             encoded_passages = encoded_passages.embeddings
             total_encoded_passages += encoded_passages
-        return np.array(total_encoded_passages)
+        return mx.array(total_encoded_passages)
     
 #############################################
 
@@ -322,7 +322,7 @@ class M2_BERT_Encoder:
             # Tokenize batch
             encodings = self.tokenizer.encode_batch(queries_chunk, add_special_tokens=True)
 
-            input_ids_list = []
+            imxut_ids_list = []
             attention_mask_list = []
 
             for enc in encodings:
@@ -338,15 +338,15 @@ class M2_BERT_Encoder:
                     ids = ids[:self.evaluation_max_seq_len]
                     mask = mask[:self.evaluation_max_seq_len]
 
-                input_ids_list.append(ids)
+                imxut_ids_list.append(ids)
                 attention_mask_list.append(mask)
 
             # Convert to MLX arrays
-            input_ids = mx.array(input_ids_list, dtype=mx.int32)
+            imxut_ids = mx.array(imxut_ids_list, dtype=mx.int32)
             attention_mask = mx.array(attention_mask_list, dtype=mx.int32)
 
             # Forward pass
-            encoded_text = self.model(input_ids=input_ids, attention_mask=attention_mask)
+            encoded_text = self.model(imxut_ids=imxut_ids, attention_mask=attention_mask)
 
             # Extract pooled output (index 1 for BERT)
             embedding = encoded_text[1] if isinstance(encoded_text, tuple) else encoded_text
@@ -391,7 +391,7 @@ def generate_together_embeddings(text: str, model_api_string: str, api_key: str)
         url,
         headers=headers,
         json={
-            "input": text,
+            "imxut": text,
             "model": model_api_string
         }
     )
@@ -406,7 +406,7 @@ class Together_Encoder:
         self.together_model_name = together_model_name
         self.encoder_batch_size = 1
 
-    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_queries(self, queries: List[str], batch_size: int, **kwargs) -> mx.array:
         
         total_encoded_queries = []
         for query_chunks in tqdm(split_list(queries, self.encoder_batch_size), total = len(queries) // self.encoder_batch_size + (1 if len(queries) % self.encoder_batch_size != 0 else 0)):
@@ -419,10 +419,10 @@ class Together_Encoder:
             assert len(encoded_queries) == 768
             # breakpoint()
             total_encoded_queries.append(encoded_queries)
-        return np.array(total_encoded_queries)
+        return mx.array(total_encoded_queries)
 
     # Write your own encoding corpus function (Returns: Document embeddings as numpy array)  
-    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> np.ndarray:
+    def encode_corpus(self, corpus: List[Dict[str, str]], batch_size: int, **kwargs) -> mx.array:
         
         passages = [passage['title'] + " " + passage['text'] for passage in corpus]
         
@@ -437,4 +437,4 @@ class Together_Encoder:
             assert type(encoded_passages) == list
             assert len(encoded_passages) == 768
             total_encoded_passages.append(encoded_passages)
-        return np.array(total_encoded_passages)
+        return mx.array(total_encoded_passages)
