@@ -210,12 +210,28 @@ class M2_BERT_Encoder:
             config_dict.update(model_config)
             self.config = BertConfig(**config_dict)
         else:
-            # Fall back to cfg only - use from_pretrained to get base config
-            self.config = BertConfig.from_pretrained('bert-base-uncased', **model_config)
+            # Create config from YAML model_config with bert-base defaults
+            # Set default BERT values for any missing parameters
+            default_config = {
+                'vocab_size': 30522,
+                'hidden_size': 768,
+                'num_hidden_layers': 12,
+                'num_attention_heads': 12,
+                'intermediate_size': 3072,
+                'hidden_act': "gelu",
+                'hidden_dropout_prob': 0.1,
+                'attention_probs_dropout_prob': 0.1,
+                'max_position_embeddings': 512,
+                'type_vocab_size': 2,
+                'initializer_range': 0.02,
+                'layer_norm_eps': 1e-12,
+            }
+            default_config.update(model_config)
+            self.config = BertConfig(**default_config)
 
         # Update config with all model_config items (to add custom attributes not in __init__)
         for key, value in model_config.items():
-            self.config.update({key: value})
+            setattr(self.config, key, value)
 
         # Create model
         self.model = BertModel(self.config)
@@ -224,6 +240,7 @@ class M2_BERT_Encoder:
         print(f"Loading weights from: {checkpoint_path}")
         sys.path.insert(0, str(Path(__file__).parent.parent))
         from utils.pytorch_loader import load_pytorch_bin
+        import gc
 
         checkpoint = load_pytorch_bin(checkpoint_path)
 
@@ -231,10 +248,17 @@ class M2_BERT_Encoder:
         # Composer format (from Mosaic training): {'state': {'model': {...}}}
         if 'state' in checkpoint and 'model' in checkpoint['state']:
             state_dict = checkpoint['state']['model']
+            # Delete nested structure to free memory
+            del checkpoint['state']
+            del checkpoint
         elif 'model' in checkpoint:
             state_dict = checkpoint['model']
+            del checkpoint
         else:
             state_dict = checkpoint
+            del checkpoint
+
+        gc.collect()
 
         # Clean up keys and convert to list of (name, array) tuples
         # Original checkpoint was from BertForSequenceClassification which has .bert attribute
@@ -264,8 +288,16 @@ class M2_BERT_Encoder:
 
             weights_list.append((clean_key, value))
 
+        # Clear state_dict to free memory before loading
+        del state_dict
+        gc.collect()
+
         # Load into model using load_weights (strict=False to skip missing/extra keys)
         self.model.load_weights(weights_list, strict=False)
+
+        # Clear weights_list after loading
+        del weights_list
+        gc.collect()
 
         # Manually set expanded position embeddings if needed
         if expanded_pos_emb is not None:
@@ -275,7 +307,7 @@ class M2_BERT_Encoder:
             print(f"Set expanded position embeddings: {expanded_pos_emb.shape}")
 
         print("-------------------------------------------------")
-        print(f"Pretrained Checkpoint: {checkpoint}")
+        print(f"Pretrained Checkpoint: {checkpoint_path}")
         print("-------------------------------------------------")
 
         ######################################
@@ -322,31 +354,38 @@ class M2_BERT_Encoder:
             # Tokenize batch
             encodings = self.tokenizer.encode_batch(queries_chunk, add_special_tokens=True)
 
-            imxut_ids_list = []
+            input_ids_list = []
             attention_mask_list = []
+
+            # Find max length in this batch (for dynamic padding)
+            max_len_in_batch = max(len(enc.ids) for enc in encodings)
+            # Cap at evaluation_max_seq_len
+            max_len_in_batch = min(max_len_in_batch, self.evaluation_max_seq_len)
 
             for enc in encodings:
                 ids = enc.ids
                 mask = enc.attention_mask
 
-                # Pad or truncate to evaluation_max_seq_len
-                if len(ids) < self.evaluation_max_seq_len:
-                    pad_len = self.evaluation_max_seq_len - len(ids)
-                    ids = ids + [0] * pad_len  # Pad with 0
-                    mask = mask + [0] * pad_len
-                else:
+                # Truncate if needed
+                if len(ids) > self.evaluation_max_seq_len:
                     ids = ids[:self.evaluation_max_seq_len]
                     mask = mask[:self.evaluation_max_seq_len]
 
-                imxut_ids_list.append(ids)
+                # Pad to max length in batch (not to evaluation_max_seq_len!)
+                if len(ids) < max_len_in_batch:
+                    pad_len = max_len_in_batch - len(ids)
+                    ids = ids + [0] * pad_len  # Pad with 0
+                    mask = mask + [0] * pad_len
+
+                input_ids_list.append(ids)
                 attention_mask_list.append(mask)
 
             # Convert to MLX arrays
-            imxut_ids = mx.array(imxut_ids_list, dtype=mx.int32)
+            input_ids = mx.array(input_ids_list, dtype=mx.int32)
             attention_mask = mx.array(attention_mask_list, dtype=mx.int32)
 
             # Forward pass
-            encoded_text = self.model(imxut_ids=imxut_ids, attention_mask=attention_mask)
+            encoded_text = self.model(input_ids=input_ids, attention_mask=attention_mask)
 
             # Extract pooled output (index 1 for BERT)
             embedding = encoded_text[1] if isinstance(encoded_text, tuple) else encoded_text
@@ -391,7 +430,7 @@ def generate_together_embeddings(text: str, model_api_string: str, api_key: str)
         url,
         headers=headers,
         json={
-            "imxut": text,
+            "input": text,
             "model": model_api_string
         }
     )

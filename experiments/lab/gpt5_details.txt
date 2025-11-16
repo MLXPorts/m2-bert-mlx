@@ -11556,7 +11556,7 @@ run_all_parity.sh|
     29 +    def log(self, name: str, arr: Any, framework: str = "") -> None:
     30 +        if not self.enabled:
     31 +            return
-    32 +        x = self._to_np(arr)
+    32 +        x = self._to_mxarray(arr)
     33 +        if x is None:
     34 +            return
     35 +        stats = self._stats(x)
@@ -11572,7 +11572,7 @@ run_all_parity.sh|
     43 +        self.stream.flush()
     44 +
     45 +    @staticmethod
-    46 +    def _to_np(arr: Any) -> Optional[np.ndarray]:
+    46 +    def _to_mxarray(arr: Any) -> Optional[np.ndarray]:
     47 +        try:
     48 +            import mlx.core as mx  # type: ignore
     49 +        except Exception:

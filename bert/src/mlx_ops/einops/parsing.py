@@ -2,7 +2,9 @@ import keyword
 import warnings
 from typing import List, Optional, Set, Tuple, Union
 
-from einops import EinopsError
+class EinopsError(RuntimeError):
+    """Runtime error thrown by einops"""
+    pass
 
 _ellipsis: str = "…"  # NB, this is a single unicode symbol. String is used as it is not a list, but can be iterated
 

@@ -27,7 +27,7 @@ Paper coming soon - we're releasing the code and models first to get **your feed
 
 ## Setup
 
-Follow the same setup as in the general [README](README.md).
+Follow the same setup as in the general [README](../bert/README.md).
 We recommend having `flash-fft-conv` installed:
 
 ```bash
@@ -38,7 +38,7 @@ pip install git+https://github.com/HazyResearch/flash-fft-conv.git
 If you don't have it installed, you can still run the code, but you will need to set `use_flashfft` to `False` in the `yamls/embeddings` files.
 Model loading will print out that you are missing some parameters, but that is fine.
 
-For inference, you additionally need to install the dependencies in [requirements-embeddings.txt](requirements-embeddings.txt).
+For inference, you additionally need to install the dependencies in [requirements-embeddings.txt](../bert/requirements-embeddings.txt).
 This is mostly `beir` and a few extra libraries to run embedding models that are only available behind existing APIs.
 
 ## Obtaining Pretrained Checkpoints
@@ -50,7 +50,7 @@ You can download pretrained checkpoints from HuggingFace:
 
 ## Generating Embeddings
 
-You can see [embed_text.py](embed_text.py) for a minimal example of generating embeddings using the M2 BERT models.
+You can see [embed_text.py](../bert/embed_text.py) for a minimal example of generating embeddings using the M2 BERT models.
 We do not recommend using this script on its own to process many documents, since it re-loads the model from scratch every time and runs with batch size 1.
 
 ```bash
@@ -130,7 +130,7 @@ python loco_eval.py --model-name togethercomputer/m2-bert-80M-32k-retrieval-v2 -
 
 ## Training
 
-You can use [embeddings_train.py](embeddings_train.py) to train your own M2-BERT embedding models.
+You can use [embeddings_train.py](../bert/embeddings_train.py) to train your own M2-BERT embedding models.
 
 Follow the [main setup instructions for M2](https://github.com/HazyResearch/m2/bert) and then install the embedding specific dependencies with:
 

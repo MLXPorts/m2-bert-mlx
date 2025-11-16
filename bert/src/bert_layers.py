@@ -1,4 +1,3 @@
-
 # Copyright 2018 The Google AI Language Team Authors and The HuggingFace Inc. team.
 # Copyright (c) 2018-2021, NVIDIA CORPORATION.  All rights reserved.
 # Copyright (c) 2022, Tri Dao.
@@ -1549,31 +1548,37 @@ class BertForSequenceClassification(BertPreTrainedModel):
 
         return_dict = return_dict if return_dict is not None else self.config.use_return_dict
 
+        # Allow variable sequence lengths (dynamic padding) instead of forcing exact max_position_embeddings.
+        seq_len = input_ids.shape[1]
+        max_len = self.config.max_position_embeddings
+        if seq_len > max_len:
+            # Truncate if longer than configured maximum
+            input_ids = input_ids[:, :max_len]
+            if attention_mask is not None:
+                attention_mask = attention_mask[:, :max_len]
+            seq_len = max_len
+        # If shorter, we do NOT pad to max_len to avoid huge memory usage. The base BertModel supports variable length.
+        if attention_mask is not None and attention_mask.shape[1] != seq_len:
+            raise ValueError(f"Attention mask length {attention_mask.shape[1]} does not match input length {seq_len}")
+
         if self.config.sequence_token_planting:
-            print("Reached sequence_token_planting")
+            # Keep planting logic but respect actual seq_len.
             for example_number in range(input_ids.shape[0]):
-                for replace_position in range(1, int(input_ids.shape[1] / 128)): #+ 1 
+                for replace_position in range(1, int(seq_len / 128)):
                     input_ids[example_number][replace_position * 128] = 101
 
-
-        # Validate input shape matches expected position embeddings
-        if input_ids.shape[1] != self.config.max_position_embeddings:
-            raise ValueError(f"Input IDs shape {input_ids.shape} does not match max position embeddings {self.config.max_position_embeddings}")
-        if attention_mask is not None:
-            assert attention_mask.shape[1] == self.config.max_position_embeddings
-
         outputs = self.bert(
-                input_ids,
-                attention_mask=attention_mask,
-                token_type_ids=token_type_ids,
-                position_ids=position_ids,
-                head_mask=head_mask,
-                inputs_embeds=inputs_embeds,
-                output_attentions=output_attentions,
-                output_hidden_states=output_hidden_states,
-                return_dict=return_dict,
-            )
-            
+            input_ids,
+            attention_mask=attention_mask,
+            token_type_ids=token_type_ids,
+            position_ids=position_ids,
+            head_mask=head_mask,
+            inputs_embeds=inputs_embeds,
+            output_attentions=output_attentions,
+            output_hidden_states=output_hidden_states,
+            return_dict=return_dict,
+        )
+
         if mx.isnan(outputs[0]).any():
             print("NaNs in outputs.")
             raise ValueError()

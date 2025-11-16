@@ -1,5 +1,5 @@
 """ Utils for the training loop. Copied from https://github.com/HazyResearch/transformers/blob/master/src/utils/utils.py """
-import torch.nn as nn
+import mlx.nn as nn
 
 class OptimModule(nn.Module):
     """ Interface for Module that allows registering buffers/parameters with configurable optimizer hyperparameters """

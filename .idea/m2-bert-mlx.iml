@@ -2,7 +2,12 @@
 <module type="JAVA_MODULE" version="4">
   <component name="NewModuleRootManager" inherit-compiler-output="true">
     <exclude-output />
-    <content url="file://$MODULE_DIR$" />
+    <content url="file://$MODULE_DIR$">
+      <excludeFolder url="file://$MODULE_DIR$/.idea/inspectionProfiles" />
+      <excludeFolder url="file://$MODULE_DIR$/.model" />
+      <excludeFolder url="file://$MODULE_DIR$/bert/.model" />
+      <excludeFolder url="file://$MODULE_DIR$/bert/.model/m2-bert-80m/.cache" />
+    </content>
     <orderEntry type="jdk" jdkName="py313" jdkType="Python SDK" />
     <orderEntry type="sourceFolder" forTests="false" />
   </component>

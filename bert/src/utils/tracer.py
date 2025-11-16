@@ -16,7 +16,7 @@ from __future__ import annotations
 import sys
 import json
 from typing import Any, Optional
-import numpy as np
+import mlx.core as mx
 
 
 class Tracer:
@@ -29,7 +29,7 @@ class Tracer:
     def log(self, name: str, arr: Any, framework: str = "") -> None:
         if not self.enabled:
             return
-        x = self._to_np(arr)
+        x = self._to_mxarray(arr)
         if x is None:
             return
         stats = self._stats(x)
@@ -43,49 +43,31 @@ class Tracer:
         self.stream.flush()
 
     @staticmethod
-    def _to_np(arr: Any) -> Optional[np.ndarray]:
-        try:
-            import mlx.core as mx  # type: ignore
-        except Exception:
-            mx = None  # type: ignore
-        if mx is not None:
-            from mlx.core import array as mx_array  # type: ignore
-        else:
-            mx_array = None
-        try:
-            import torch  # type: ignore
-        except Exception:
-            torch = None  # type: ignore
-
-        if mx_array is not None and isinstance(arr, mx_array):  # type: ignore
-            return np.array(arr)
-        if torch is not None and torch.is_tensor(arr):
-            return arr.detach().cpu().numpy()
-        if isinstance(arr, np.ndarray):
-            return arr
-        return None
+    def _to_mxarray(arr: Any) -> Optional[mx.array]:
+        import mlx.core as mx
+        return mx.array(arr)
 
     @staticmethod
-    def _stats(x: np.ndarray) -> dict:
-        x = x.astype(np.float32, copy=False)
+    def _stats(x: mx.array) -> dict:
+        x = x.astype(mx.float32)
         return dict(
             shape=tuple(x.shape),
             dtype=str(x.dtype),
-            min=float(x.min(initial=np.float32(0.0))),
-            max=float(x.max(initial=np.float32(0.0))),
+            min=float(x.min()),
+            max=float(x.max()),
             mean=float(x.mean()),
-            l2=float(np.linalg.norm(x.ravel())),
+            l2=float(mx.linalg.norm(x.ravel())),
         )
 
 
-def ulp_distance(a: np.ndarray, b: np.ndarray) -> float:
+def ulp_distance(a: mx.array, b: mx.array) -> float:
     """Return average ULP distance between two float32 arrays."""
-    a = a.astype(np.float32, copy=False)
-    b = b.astype(np.float32, copy=False)
-    ai = a.view(np.int32).copy()
-    bi = b.view(np.int32).copy()
+    a = a.astype(mx.float32)
+    b = b.astype(mx.float32)
+    ai = a.view(mx.int32)
+    bi = b.view(mx.int32)
     # Make lexicographically ordered by flipping sign bit ordering
     ai ^= (ai >> 31) & 0x7FFFFFFF
     bi ^= (bi >> 31) & 0x7FFFFFFF
-    return float(np.mean(np.abs(ai - bi)))
+    return float(mx.mean(mx.abs(ai - bi)))
 

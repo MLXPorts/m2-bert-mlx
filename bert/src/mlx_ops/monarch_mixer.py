@@ -143,6 +143,7 @@ class MonarchMixerSequenceMixing(nn.Module):
         self.short_filter_weight = mx.random.normal((total_width, 3)) * mx.array(0.02, dtype=mx.float32)
         self.short_filter_bias = mx.zeros((total_width,), dtype=mx.float32)
 
+
     def depthwise_conv1d(self, x, kernel_size=3, padding=2):
         """
         Depthwise 1D convolution using Metal kernel

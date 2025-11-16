@@ -5,9 +5,156 @@
 
 ---
 
-## Accomplishments
+## Next Steps: Classification Implementation
 
-### 1. ✅ FFT Convolutional Kernel - FULLY OPERATIONAL
+### Research Complete ✅
+
+Comprehensive research documented in `CLASSIFICATION_RESEARCH.md`:
+- **9 GLUE benchmark tasks** analyzed
+- **7 compatible M2-BERT models** identified on HuggingFace
+- **BertForSequenceClassification** already implemented in MLX
+- **Existing 32k-retrieval model** supports classification (already cached!)
+
+### Implementation Phases
+
+#### Phase 1: Basic Classification Inference (IMMEDIATE - 2-3 hours)
+**Status:** Ready to implement
+**Goal:** Single text classification with existing cached model
+
+**Components to Create:**
+1. `bert/classify_text.py` - CLI script for quick testing
+2. `bert/classification_inference.py` - Main inference class
+   - Similar to `M2_BERT_Encoder` pattern
+   - Support single sentence and sentence pairs
+   - Handle different `num_labels` configurations
+   - Dynamic padding (already implemented)
+
+**What We Have:**
+- ✅ BertForSequenceClassification (bert/src/bert_layers.py:1299)
+- ✅ Weight loading infrastructure (pure Python/MLX)
+- ✅ Tokenizer (BERT tokenizer from HF)
+- ✅ Compatible model cached (togethercomputer/m2-bert-80M-32k-retrieval)
+
+**What's Needed:**
+- Inference wrapper class
+- Output postprocessing (softmax, argmax)
+- Simple CLI interface
+
+#### Phase 2: GLUE Task Support (FUTURE - 4-6 hours)
+- Task-specific processors
+- Metrics implementation (MCC, F1, Pearson, Spearman)
+- Evaluation pipeline
+- Dataset loading
+
+#### Phase 3: Multi-Model Support (FUTURE - 6-8 hours)
+- Support all M2-BERT sizes (80M, 110M, 260M, 341M)
+- Auto-download from HuggingFace
+- Universal checkpoint adapter
+- Model registry
+
+#### Phase 4: Advanced Features (EXTENDED - 8-12 hours)
+- Batch inference optimization
+- Model serving API
+- Fine-tuning support
+- Benchmark suite
+
+### Available Models (HuggingFace)
+
+**Text Classification Models:**
+- danfu09/m2-bert-80M
+- danfu09/m2-bert-110M
+- danfu09/m2-bert-260m
+- danfu09/m2-bert-341m
+
+**Retrieval Models (also support classification):**
+- togethercomputer/m2-bert-80M-8k-retrieval
+- **togethercomputer/m2-bert-80M-32k-retrieval** ← CACHED, USE THIS
+- togethercomputer/m2-bert-80M-2k-retrieval
+
+### GLUE Benchmark Tasks
+
+**Binary Classification (2 labels):**
+- CoLA (linguistic acceptability) - MCC metric
+- SST-2 (sentiment) - Accuracy
+- MRPC (paraphrase) - F1 & Accuracy
+- QQP (duplicate questions) - F1 & Accuracy
+- QNLI (question entailment) - Accuracy
+- RTE (textual entailment) - Accuracy
+
+**Multi-class Classification (3 labels):**
+- MNLI (natural language inference) - Accuracy
+
+**Regression (1 output):**
+- STS-B (semantic similarity) - Pearson & Spearman correlation
+
+### Recommended Next Action
+
+**Start Phase 1 immediately:**
+1. Create `bert/classification_inference.py` based on `embeddings_inference.py` pattern
+2. Create `bert/classify_text.py` CLI script
+3. Test with cached 32k-retrieval model
+4. Validate outputs
+5. Document usage
+
+**Estimated completion:** 2-3 focused hours
+
+This will demonstrate full M2-BERT MLX capabilities (embeddings ✅ + classification ✅) with minimal effort.
+
+---
+
+## Previous Accomplishments
+
+### 1. ✅ Memory Optimization & Weight Loading (Nov 15, 2025)
+
+**MAJOR BREAKTHROUGH:** Solved catastrophic memory usage (256GB → reasonable)
+
+#### Issues Identified & Fixed:
+1. **PyTorch Checkpoint Loading**
+   - Problem: 4x memory duplication (checkpoint + state_dict + weights_list + model)
+   - Solution: Pure Python/MLX unpickler, no torch/numpy dependencies
+   - Added safetensors caching for instant subsequent loads
+   - Result: First load ~1x model memory, subsequent loads instant
+
+2. **BFloat16 Handling**
+   - Problem: BFloat16 tensors misinterpreted as Float32 (wrong element count)
+   - Solution: Proper bit-shifting conversion (bf16 << 16 = f32)
+   - Result: All dtypes handled correctly
+
+3. **Configuration Mismatch**
+   - Problem: YAML had hidden_size=1792 but checkpoint was hidden_size=768
+   - Solution: Fixed YAML to match actual checkpoint dimensions
+   - Result: Model layers correctly sized
+
+4. **Excessive Static Padding (CRITICAL)**
+   - Problem: Always padding to 32768 tokens for every input
+     - "Hello world" (5 tokens) → padded to 32768 tokens = 96.2 MB
+   - Solution: Dynamic padding to actual batch max length
+     - "Hello world" (5 tokens) → padded to 5 tokens = 15 KB
+   - Result: **6554x memory reduction** for short inputs
+
+#### Key Discoveries:
+- FFT convolution handles variable-length sequences efficiently (no need to pad to max)
+- Model supports up to 32k tokens but works perfectly with shorter sequences
+- Original code's static padding was for benchmarking, not correctness
+
+#### Files Created/Modified:
+- `utils/pytorch_loader.py` - Pure Python/MLX unpickler with safetensors caching
+- `bert/embeddings_inference.py` - Dynamic padding implementation
+- `bert/yamls/embeddings/m2-bert-80M-32k-retrieval.yaml` - Fixed config
+- `test_tokenization_roundtrip.py` - Comprehensive validation test
+- `MEMORY_OPTIMIZATION_SUMMARY.md` - Detailed documentation
+- `PYTORCH_LOADER_SUMMARY.md` - Loader implementation details
+
+#### Test Results:
+```bash
+✓ Embeddings working: python3 bert/embed_text.py --text "Test"
+✓ Round-trip validation: All texts decode correctly
+✓ Dynamic padding: 3→6→6 tokens (not 32768!)
+✓ Memory: 15 KB for short inputs (was 96 MB)
+✓ Processing: ~6-7 it/s
+```
+
+### 2. ✅ FFT Convolutional Kernel - FULLY OPERATIONAL
 
 The custom Metal FFT convolution kernel is fully integrated and tested:
 
