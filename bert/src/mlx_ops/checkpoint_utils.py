@@ -100,9 +100,9 @@ def analyze_checkpoint(weights: Dict[str, mx.array]) -> Dict[str, any]:
     emb_key = 'model.bert.embeddings.word_embeddings.weight'
     if emb_key in weights:
         vocab_size, hidden_size = weights[emb_key].shape
-        config['vocab_size'] = int(vocab_size)
-        config['hidden_size'] = int(hidden_size)
-    
+        config['vocab_size'] = vocab_size
+        config['hidden_size'] = hidden_size
+
     # Number of layers
     num_layers = 0
     while f'model.bert.encoder.layer.{num_layers}.attention.filter_fn.bias' in weights:
@@ -113,8 +113,8 @@ def analyze_checkpoint(weights: Dict[str, mx.array]) -> Dict[str, any]:
     pos_key = 'model.bert.embeddings.position_embeddings.weight'
     if pos_key in weights:
         max_pos, _ = weights[pos_key].shape
-        config['max_position_embeddings'] = int(max_pos)
-    
+        config['max_position_embeddings'] = max_pos
+
     # Hyena filter configuration
     sample_layer = 'model.bert.encoder.layer.0.attention.filter_fn.'
     
@@ -122,14 +122,14 @@ def analyze_checkpoint(weights: Dict[str, mx.array]) -> Dict[str, any]:
     pos_emb_key = sample_layer + 'pos_emb.z'
     if pos_emb_key in weights:
         _, _, emb_dim = weights[pos_emb_key].shape
-        config['hyena_emb_dim'] = int(emb_dim)
-    
+        config['hyena_emb_dim'] = emb_dim
+
     # Get hyena_filter_order from implicit_filter.0.weight output dimension
     filter_key = sample_layer + 'implicit_filter.0.weight'
     if filter_key in weights:
         order, _ = weights[filter_key].shape
-        config['hyena_filter_order'] = int(order)
-    
+        config['hyena_filter_order'] = order
+
     # Check bidirectional
     rev_key = sample_layer + 'implicit_filter_rev.0.weight'
     config['bidirectional'] = rev_key in weights
@@ -139,12 +139,12 @@ def analyze_checkpoint(weights: Dict[str, mx.array]) -> Dict[str, any]:
     if mlp_key in weights:
         weight_shape = weights[mlp_key].shape
         if len(weight_shape) == 3:  # (nblocks, q, n/nblocks)
-            config['nblocks'] = int(weight_shape[0])
+            config['nblocks'] = weight_shape[0]
             # Intermediate size = nblocks * q
-            config['intermediate_size'] = int(weight_shape[0] * weight_shape[1])
+            config['intermediate_size'] = weight_shape[0] * weight_shape[1]
         else:
             # Standard MLP
-            config['intermediate_size'] = int(weight_shape[0])
+            config['intermediate_size'] = weight_shape[0]
             config['nblocks'] = 4  # default
     
     # Alternative: check gated_layers for actual intermediate size
@@ -152,16 +152,16 @@ def analyze_checkpoint(weights: Dict[str, mx.array]) -> Dict[str, any]:
     if gated_key in weights:
         weight_shape = weights[gated_key].shape
         if len(weight_shape) == 3:  # (nblocks, intermediate*2/nblocks, hidden/nblocks)
-            config['nblocks'] = int(weight_shape[0])
+            config['nblocks'] = weight_shape[0]
             # For gated MLP: gated_layers has 2x intermediate (gate + value)
             # shape[1] = (intermediate_size / nblocks) * 2
             # So: intermediate_size = nblocks * shape[1] / 2
-            config['intermediate_size'] = int(weight_shape[0] * weight_shape[1] // 2)
-    
+            config['intermediate_size'] = weight_shape[0] * weight_shape[1] // 2
+
     # Count total parameters
     total_params = sum(w.size for w in weights.values())
-    config['total_parameters'] = int(total_params)
-    
+    config['total_parameters'] = total_params
+
     return config
 
 

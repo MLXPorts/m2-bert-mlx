@@ -132,9 +132,7 @@ def blockdiag_butterfly_multiply(x, w1_bfly, w2_bfly):
     n = x.shape[-1]
 
     # Compute batch_dim as product of batch dimensions using MLX ops
-    batch_dim = mx.array(1, dtype=mx.int32)
-    for dim in batch_shape:
-        batch_dim = mx.multiply(batch_dim, mx.array(dim, dtype=mx.int32))
+    batch_dim = mx.prod(mx.array(batch_shape, dtype=mx.int32)).item()
 
     k, q, p = w1_bfly.shape
     l, s, r = w2_bfly.shape

@@ -3,7 +3,7 @@ import torch
 from softmaxlib import additive_masked_softmax_dropout_forward
 from softmaxlib import masked_scale_softmax_backward_recompute
 
-from src.ops.triton.softmax_dropout import softmax_dropout
+from bert.src.ops.triton.softmax_dropout import softmax_dropout
 
 
 class _fused_softmax_dropout(torch.autograd.Function):
@@ -40,3 +40,4 @@ def fused_softmax_dropout(x, p, mask):
         return _fused_softmax_dropout.apply(x, p, mask)[0]
     else:
         return softmax_dropout(x, p, mask, mask_type='bk')
+
