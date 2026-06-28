@@ -30,7 +30,7 @@ for p in (PROJECT_ROOT, SRC_DIR, UTILS_DIR):
 # Import modules directly now that src directory is on path (avoid src.__init__ usage)
 import configuration_bert
 import bert_layers
-from pytorch_loader import load_pytorch_bin
+from mlx_weightlifter import load_pytorch_bin
 
 BertConfig = configuration_bert.BertConfig
 BertForSequenceClassification = bert_layers.BertForSequenceClassification

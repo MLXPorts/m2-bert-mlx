@@ -1,2 +1,3 @@
 mlx>=0.13.0
+mlx-weightlifter>=0.1.1
 numpy
