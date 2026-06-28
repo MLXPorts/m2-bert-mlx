@@ -1,14 +1,14 @@
 #!/usr/bin/env python
 """
 PyTorch checkpoint loader for MLX with on-disk conversion to safetensors.
-Converts .pt and .bin files to .safetensors format on first load to avoid
+Converts .pt, .bin, and .jit files to .safetensors format on first load to avoid
 loading large pickle files into memory.
 """
 import pickle
 import zipfile
+import struct
 from pathlib import Path
 from typing import Dict
-import os
 
 import mlx.core as mx
 
@@ -211,7 +211,7 @@ class _TorchUnpickler(pickle.Unpickler):
 def _bytes_to_mlx_array(raw_bytes: bytes, dtype) -> mx.array:
     """
     Convert raw bytes from PyTorch storage to MLX array.
-    Pure Python implementation using struct - NO numpy dependency.
+    Pure struct -> mx.array with stream=mx.cpu. NO numpy.
 
     Args:
         raw_bytes: Raw binary data from PyTorch storage
@@ -220,13 +220,22 @@ def _bytes_to_mlx_array(raw_bytes: bytes, dtype) -> mx.array:
     Returns:
         Flat MLX array with the specified dtype
     """
-    import struct
-    import array
+    # Dtype info: (struct_format, element_size)
+    dtype_info = {
+        mx.float32: ('f', 4),
+        mx.float16: ('e', 2),
+        mx.float64: ('d', 8),
+        mx.int8: ('b', 1),
+        mx.int16: ('h', 2),
+        mx.int32: ('i', 4),
+        mx.int64: ('q', 8),
+        mx.uint8: ('B', 1),
+        mx.bool_: ('?', 1),
+    }
 
-    # Handle BFloat16 specially
+    # Handle BFloat16 specially - convert to float32
+    # BFloat16 is 2 bytes per element, convert to float32 by shifting bits left by 16
     if dtype == 'bfloat16':
-        # BFloat16 is 2 bytes per element
-        # Convert to float32 by shifting bits left by 16
         num_elements = len(raw_bytes) // 2
 
         # Unpack as uint16
@@ -244,68 +253,13 @@ def _bytes_to_mlx_array(raw_bytes: bytes, dtype) -> mx.array:
 
         return mx.array(float32_values, dtype=mx.float32)
 
-    # Dtype info: (struct_format, element_size, mlx_dtype)
-    dtype_info = {
-        mx.float32: ('f', 4),
-        mx.float16: ('e', 2),  # 'e' for half-precision float
-        mx.float64: ('d', 8),
-        mx.int8: ('b', 1),
-        mx.int16: ('h', 2),
-        mx.int32: ('i', 4),
-        mx.int64: ('q', 8),
-        mx.uint8: ('B', 1),
-        mx.bool_: ('?', 1),
-    }
-
     if dtype not in dtype_info:
         raise ValueError(f"Unsupported dtype: {dtype}")
 
     fmt_char, elem_size = dtype_info[dtype]
-    num_elements = len(raw_bytes) // elem_size
-
-    # Use memoryview for zero-copy access, then unpack
-    # For large arrays, use array.array which is more efficient than struct
-    if dtype == mx.float32:
-        arr = array.array('f')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.float64:
-        arr = array.array('d')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.int32:
-        arr = array.array('i')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.int64:
-        arr = array.array('q')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.int16:
-        arr = array.array('h')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.int8:
-        arr = array.array('b')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.uint8:
-        arr = array.array('B')
-        arr.frombytes(raw_bytes)
-        return mx.array(list(arr), dtype=dtype)
-    elif dtype == mx.float16:
-        # float16 needs special handling - unpack with struct
-        values = struct.unpack(f'<{num_elements}e', raw_bytes)
-        return mx.array(values, dtype=dtype)
-    elif dtype == mx.bool_:
-        # bool needs special handling
-        values = struct.unpack(f'{num_elements}?', raw_bytes)
-        return mx.array(values, dtype=dtype)
-    else:
-        # Fallback to struct.unpack
-        format_str = f'<{num_elements}{fmt_char}'
-        values = struct.unpack(format_str, raw_bytes)
-        return mx.array(values, dtype=dtype)
+    n = len(raw_bytes) // elem_size
+    values = struct.unpack(f'<{n}{fmt_char}', raw_bytes)
+    return mx.array(values, dtype=dtype)
 
 
 def _get_mlx_dtype(storage_type):
@@ -335,3 +289,212 @@ def _get_mlx_dtype(storage_type):
         return mx.float32  # Default
 
 
+# =============================================================================
+# TorchScript JIT Support
+# =============================================================================
+
+# Global state for JIT loading
+_jit_zip_file = None
+_jit_base_path = ""
+_jit_storage_cache = {}
+
+
+class _FakeStorage:
+    """Fake torch storage that tracks dtype and key."""
+    def __init__(self, dtype):
+        self.dtype = dtype
+        self.key = None
+
+
+class _FloatStorage(_FakeStorage):
+    def __init__(self):
+        super().__init__(mx.float32)
+
+
+class _HalfStorage(_FakeStorage):
+    def __init__(self):
+        super().__init__(mx.float16)
+
+
+class _LongStorage(_FakeStorage):
+    def __init__(self):
+        super().__init__(mx.int64)
+
+
+class _IntStorage(_FakeStorage):
+    def __init__(self):
+        super().__init__(mx.int32)
+
+
+class _FakeModule:
+    """Fake nn.Module that just stores state as attributes."""
+    def __init__(self):
+        pass
+
+    def __setstate__(self, state):
+        if isinstance(state, dict):
+            self.__dict__.update(state)
+
+
+def _jit_rebuild_tensor_v2(storage, offset, size, stride, requires_grad, backward_hooks):
+    """Rebuild tensor as MLX array from JIT storage."""
+    global _jit_zip_file, _jit_base_path, _jit_storage_cache
+
+    key = storage.key
+    if key not in _jit_storage_cache:
+        path = f"{_jit_base_path}/data/{key}"
+        with _jit_zip_file.open(path) as f:
+            _jit_storage_cache[key] = f.read()
+
+    raw_bytes = _jit_storage_cache[key]
+    flat = _bytes_to_mlx_array(raw_bytes, storage.dtype)
+
+    # Slice and reshape
+    total = 1
+    for s in size:
+        total *= s
+
+    if offset != 0 or total != flat.size:
+        flat = flat[offset:offset + total]
+
+    if len(size) > 0:
+        return flat.reshape(size)
+    return flat
+
+
+class _JitUnpickler(pickle.Unpickler):
+    """Unpickler for TorchScript JIT files."""
+
+    def find_class(self, module, name):
+        # Fake torch storage classes
+        if module == 'torch':
+            if name == 'FloatStorage':
+                return _FloatStorage
+            elif name == 'HalfStorage':
+                return _HalfStorage
+            elif name == 'LongStorage':
+                return _LongStorage
+            elif name == 'IntStorage':
+                return _IntStorage
+
+        # Tensor rebuild functions
+        if module == 'torch._utils':
+            if name == '_rebuild_tensor_v2':
+                return _jit_rebuild_tensor_v2
+            elif name == '_rebuild_tensor':
+                return lambda s, o, sz, st: _jit_rebuild_tensor_v2(s, o, sz, st, False, None)
+            elif name == '_rebuild_parameter':
+                return lambda data, rg, bh: data
+
+        # JIT pickle helpers
+        if module == 'torch.jit._pickle':
+            if name in ('build_intlist', 'build_tensorlist', 'build_boollist'):
+                return list
+
+        # Any __torch__ module class -> fake module
+        if module.startswith('__torch__'):
+            return _FakeModule
+
+        # Standard library
+        if module == 'collections' and name == 'OrderedDict':
+            from collections import OrderedDict
+            return OrderedDict
+
+        return super().find_class(module, name)
+
+    def persistent_load(self, pid):
+        """Load storage reference."""
+        typename, storage_cls, key, location, size = pid[:5]
+        storage = storage_cls()
+        storage.key = key
+        return storage
+
+
+def _extract_weights_recursive(obj, prefix="") -> Dict[str, mx.array]:
+    """Recursively extract all MLX arrays from a fake module tree."""
+    weights = {}
+
+    if not hasattr(obj, '__dict__'):
+        return weights
+
+    for key, value in obj.__dict__.items():
+        full_key = f"{prefix}.{key}" if prefix else key
+
+        if isinstance(value, mx.array):
+            weights[full_key] = value
+        elif isinstance(value, _FakeModule):
+            weights.update(_extract_weights_recursive(value, full_key))
+        elif isinstance(value, (list, tuple)):
+            for i, item in enumerate(value):
+                if isinstance(item, mx.array):
+                    weights[f"{full_key}.{i}"] = item
+                elif isinstance(item, _FakeModule):
+                    weights.update(_extract_weights_recursive(item, f"{full_key}.{i}"))
+
+    return weights
+
+
+def load_jit(file_path: Path) -> Dict[str, mx.array]:
+    """
+    Load TorchScript .jit file into MLX arrays.
+
+    On first load, converts to .safetensors format and caches it.
+    Subsequent loads use the cached .safetensors file directly.
+
+    Args:
+        file_path: Path to .jit file
+
+    Returns:
+        Dictionary mapping parameter names to MLX arrays
+    """
+    global _jit_zip_file, _jit_base_path, _jit_storage_cache
+
+    file_path = Path(file_path)
+
+    # Check for cached safetensors version
+    cache_path = file_path.with_suffix('.safetensors')
+
+    if cache_path.exists():
+        print(f"Loading from cached safetensors: {cache_path}")
+        return mx.load(str(cache_path))
+
+    print(f"Converting TorchScript JIT to safetensors format...")
+    print(f"Source: {file_path}")
+    print(f"Cache: {cache_path}")
+
+    _jit_storage_cache = {}
+
+    with zipfile.ZipFile(file_path, 'r') as zf:
+        _jit_zip_file = zf
+
+        # Find data.pkl
+        pickle_name = None
+        for name in zf.namelist():
+            if name.endswith('data.pkl'):
+                pickle_name = name
+                break
+
+        if pickle_name is None:
+            raise ValueError(f"Could not find data.pkl in JIT file")
+
+        _jit_base_path = pickle_name.rsplit('/', 1)[0] if '/' in pickle_name else ''
+
+        with zf.open(pickle_name) as f:
+            unpickler = _JitUnpickler(f)
+            model = unpickler.load()
+
+    _jit_zip_file = None
+    _jit_storage_cache = {}
+
+    # Extract weights from fake module tree
+    weights = _extract_weights_recursive(model)
+
+    # Filter out empty arrays (size=0) - safetensors cannot serialize them
+    weights = {k: v for k, v in weights.items() if k and v.size > 0}
+
+    # Save to safetensors for future use
+    print(f"Saving safetensors cache...")
+    mx.save_safetensors(str(cache_path), weights)
+    print(f"Cached safetensors saved to {cache_path}")
+
+    return weights
