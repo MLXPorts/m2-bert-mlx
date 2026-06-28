@@ -239,7 +239,7 @@ class M2_BERT_Encoder:
         # Load weights from PyTorch checkpoint
         print(f"Loading weights from: {checkpoint_path}")
         sys.path.insert(0, str(Path(__file__).parent.parent))
-        from utils.pytorch_loader import load_pytorch_bin
+        from mlx_weightlifter import load_pytorch_bin
         import gc
 
         checkpoint = load_pytorch_bin(checkpoint_path)

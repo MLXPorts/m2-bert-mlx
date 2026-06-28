@@ -54,7 +54,7 @@ def load_checkpoint_any(checkpoint_path: Path) -> Dict[str, mx.array]:
     if checkpoint_path.suffix == '.safetensors':
         return mx.load(str(checkpoint_path))
     # Fallback to .bin loader (no numpy involved)
-    from utils.pytorch_loader import load_pytorch_bin
+    from mlx_weightlifter import load_pytorch_bin
     return load_pytorch_bin(checkpoint_path)
 
 
